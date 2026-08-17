@@ -1000,7 +1000,7 @@ Resources:
                       echo "Fargate profile is ACTIVE"
 
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
-                      kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL"
+                      kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
                  
                       helm install coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
                     fi
@@ -1085,7 +1085,21 @@ Resources:
                       sed -i "s|https://coder.example.com|$CODER_CLOUDFRONT_URL|g" coder-core-values-v2.yaml
                       sed -i "s|\*.coder.example.com|$CODER_CLOUDFRONT_WILDCARD|g" coder-core-values-v2.yaml
                       helm upgrade coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
-                      
+
+                      # Ensure coder-db-url matches the current Aurora endpoint. On a RetryFlag=True
+                      # re-run the Aurora cluster may have been recreated with a new endpoint; refresh
+                      # the secret (idempotent) and restart coder so it reconnects. No-op on a fresh
+                      # deploy where the value is already current.
+                      PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
+                      if kubectl -n coder get secret coder-db-url >/dev/null 2>&1; then
+                        EXISTING_DB_URL=$(kubectl -n coder get secret coder-db-url -o jsonpath='{.data.url}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+                        if [ "$EXISTING_DB_URL" != "$PostgreSQLConnectionURL" ]; then
+                          echo "coder-db-url differs from the current Aurora endpoint; refreshing and restarting coder."
+                          kubectl -n coder create secret generic coder-db-url --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
+                          kubectl -n coder rollout restart deploy/coder || true
+                        fi
+                      fi
+
                       kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=coder -n coder --timeout=300s
 
                       echo "Cycling CloudFront connection pool..."
