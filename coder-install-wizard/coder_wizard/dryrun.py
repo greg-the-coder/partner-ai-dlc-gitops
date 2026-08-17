@@ -250,7 +250,7 @@ def generate(
         "  3× ECR repositories (claude-code, kiro-cli, challenge)",
         "  CodeBuild project (image build) + Lambda trigger",
         "  Secrets Manager secrets (admin password, session token, Bedrock key)",
-        f"  IAM roles: FargatePodExecutionRole ({cluster}-fargate-pod-execution), {cluster}-coder-workshop-user",
+        f"  IAM roles: FargatePodExecutionRole ({cluster}-fargate-pod-execution), {cluster}-workshop-user",
         "  KMS key for EKS secrets encryption",
         "  Coder Premium license applied (if CoderLicenseKey provided)",
         "",

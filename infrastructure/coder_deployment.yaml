@@ -196,7 +196,7 @@ Resources:
   WorkshopCoderRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${EKSClusterName}-coder-workshop-user'
+      RoleName: !Sub '${EKSClusterName}-workshop-user'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -658,7 +658,7 @@ Resources:
       ThroughputMode: elastic
       FileSystemTags:
         - Key: Name
-          Value: !Sub '${EKSClusterName}-coder-workspace-homes'
+          Value: !Sub '${EKSClusterName}-workspace-homes'
 
   EfsMountTarget1:
     Type: AWS::EFS::MountTarget
@@ -681,7 +681,7 @@ Resources:
   CoderAdminPasswordSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${EKSClusterName}-coder-admin-password'
+      Name: !Sub '${EKSClusterName}-admin-password'
       Description: Coder Administrator Password
       GenerateSecretString:
         PasswordLength: 12
@@ -693,7 +693,7 @@ Resources:
   CoderSessionTokenSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${EKSClusterName}-coder-session-token'
+      Name: !Sub '${EKSClusterName}-session-token'
       Description: Coder Session Token for API access
 
 ################## Aurora PostgreSQL #####################

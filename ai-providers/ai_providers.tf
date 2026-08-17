@@ -100,7 +100,7 @@ provider "coderd" {
 # --------------------------------------------------------------------------
 
 # Native AWS Bedrock. Credentials come from the workspace/coder pod IAM role
-# (EKS Pod Identity: the <cluster>-coder-workshop-user role), so no static access
+# (EKS Pod Identity: the <cluster>-workshop-user role), so no static access
 # keys are set here — only the model routing settings.
 resource "coderd_ai_provider" "bedrock" {
   name         = "bedrock"
