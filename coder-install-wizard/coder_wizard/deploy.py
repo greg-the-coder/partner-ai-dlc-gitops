@@ -55,18 +55,24 @@ def _aws_json(args: list[str]) -> tuple[int, dict | list | None]:
 
 
 def _account_id() -> str:
-    code, out, _ = _aws(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
-    return out.strip() if code == 0 else ""
+    # NOTE: do not route through _aws() — it appends `--output json`, which would
+    # override `--output text` and return the account id JSON-quoted (e.g. "123..."),
+    # producing an invalid S3 bucket name.
+    res = subprocess.run(
+        ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+        capture_output=True, text=True,
+    )
+    return res.stdout.strip() if res.returncode == 0 else ""
 
 
-def _ensure_template_bucket(region: str) -> Optional[str]:
+def _ensure_template_bucket(region: str) -> tuple[Optional[str], str]:
     """Ensure a private S3 bucket exists for staging large CloudFormation templates.
 
-    Returns the bucket name, or None if it could not be created.
+    Returns (bucket_name, "") on success, or (None, error_message) on failure.
     """
     account = _account_id()
     if not account:
-        return None
+        return None, "could not determine AWS account id (aws sts get-caller-identity failed)"
     bucket = f"coder-wizard-templates-{account}-{region}"
 
     # head-bucket succeeds if it already exists and we own it.
@@ -75,14 +81,14 @@ def _ensure_template_bucket(region: str) -> Optional[str]:
         capture_output=True, text=True,
     )
     if head.returncode == 0:
-        return bucket
+        return bucket, ""
 
     create = ["aws", "s3api", "create-bucket", "--bucket", bucket, "--region", region]
     if region != "us-east-1":
         create += ["--create-bucket-configuration", f"LocationConstraint={region}"]
     res = subprocess.run(create, capture_output=True, text=True)
     if res.returncode != 0 and "BucketAlreadyOwnedByYou" not in res.stderr:
-        return None
+        return None, f"create-bucket '{bucket}' failed: {(res.stderr or res.stdout).strip()}"
 
     # Block public access; templates are fetched by CloudFormation using the caller's creds.
     subprocess.run(
@@ -123,23 +129,23 @@ def _ensure_template_bucket(region: str) -> Optional[str]:
          "--lifecycle-configuration", json.dumps(lifecycle)],
         capture_output=True, text=True,
     )
-    return bucket
+    return bucket, ""
 
 
-def _upload_template_to_s3(template_path: str, region: str, stack_name: str) -> Optional[str]:
-    """Upload a template to S3 and return an https URL usable as --template-url."""
-    bucket = _ensure_template_bucket(region)
+def _upload_template_to_s3(template_path: str, region: str, stack_name: str) -> tuple[Optional[str], str]:
+    """Upload a template to S3 and return (https_url, "") or (None, error_message)."""
+    bucket, err = _ensure_template_bucket(region)
     if not bucket:
-        return None
+        return None, err
     key = f"{stack_name}/{int(time.time())}-{os.path.basename(template_path)}"
     cp = subprocess.run(
         ["aws", "s3", "cp", template_path, f"s3://{bucket}/{key}", "--region", region],
         capture_output=True, text=True,
     )
     if cp.returncode != 0:
-        return None
+        return None, f"upload to s3://{bucket}/{key} failed: {(cp.stderr or cp.stdout).strip()}"
     host = "s3.amazonaws.com" if region == "us-east-1" else f"s3.{region}.amazonaws.com"
-    return f"https://{bucket}.{host}/{key}"
+    return f"https://{bucket}.{host}/{key}", ""
 
 
 def _template_args(template_path: str, region: str, stack_name: str) -> tuple[list[str], Optional[str]]:
@@ -157,11 +163,11 @@ def _template_args(template_path: str, region: str, stack_name: str) -> tuple[li
     if size <= TEMPLATE_BODY_MAX_BYTES:
         return ["--template-body", f"file://{template_path}"], None
 
-    url = _upload_template_to_s3(template_path, region, stack_name)
+    url, err = _upload_template_to_s3(template_path, region, stack_name)
     if not url:
         return [], (
             f"template is {size} bytes (> {TEMPLATE_BODY_MAX_BYTES} inline limit) and could not "
-            f"be staged to S3. Ensure the caller can create/write an S3 bucket in {region}."
+            f"be staged to S3: {err}"
         )
     return ["--template-url", url], None
 
