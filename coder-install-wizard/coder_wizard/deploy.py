@@ -259,6 +259,11 @@ def get_stack_status(stack_name: str, region: str) -> Optional[str]:
     return _cfn_stack_status(stack_name, region)
 
 
+def get_stack_outputs(stack_name: str, region: str) -> dict:
+    """Return the CloudFormation stack outputs as a dict (empty if none/not found)."""
+    return _cfn_stack_outputs(stack_name, region)
+
+
 def is_in_progress(status: Optional[str]) -> bool:
     return bool(status) and status.endswith("_IN_PROGRESS") and status != "REVIEW_IN_PROGRESS"
 
