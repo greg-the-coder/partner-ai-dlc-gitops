@@ -196,7 +196,7 @@ Resources:
   WorkshopCoderRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: coder-and-aws-workshop-user
+      RoleName: !Sub '${EKSClusterName}-coder-workshop-user'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -345,7 +345,7 @@ Resources:
     DependsOn: WorkshopCoderRole
     Properties:
       Path: "/"
-      InstanceProfileName: !Sub "coder-workshop-ec2-workspace-profile"
+      InstanceProfileName: !Sub '${EKSClusterName}-ec2-workspace-profile'
       Roles:
         - !Ref WorkshopCoderRole
 
@@ -693,7 +693,7 @@ Resources:
   CoderSessionTokenSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'partner-coder-session-token'
+      Name: !Sub '${EKSClusterName}-coder-session-token'
       Description: Coder Session Token for API access
 
 ################## Aurora PostgreSQL #####################
@@ -727,7 +727,7 @@ Resources:
   CoderAuroraSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupName: coderaurorasubnetgroup
+      DBSubnetGroupName: !Sub '${EKSClusterName}-aurora-subnet-group'
       DBSubnetGroupDescription: "Subnet group for Coder' Aurora PostgreSQL - same as EKS cluster"
       SubnetIds: 
         - !Ref PrivateSubnet1
@@ -737,7 +737,7 @@ Resources:
   CoderAuroraCluster:
     Type: AWS::RDS::DBCluster
     Properties:
-      DBClusterIdentifier: !Ref DatabaseName
+      DBClusterIdentifier: !Sub '${EKSClusterName}-aurora'
       Engine: aurora-postgresql
       EngineVersion: '16.11'
       MasterUsername: !Ref Username
@@ -757,7 +757,7 @@ Resources:
   CoderAuroraInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: !Sub '${DatabaseName}-instance'
+      DBInstanceIdentifier: !Sub '${EKSClusterName}-aurora-instance'
       DBInstanceClass: db.serverless
       Engine: aurora-postgresql
       DBClusterIdentifier: !Ref CoderAuroraCluster
@@ -836,6 +836,8 @@ Resources:
             Value: !Ref CoderGitOpsTemplateRepoURL  
           - Name: CoderSessionTokenSecretArn
             Value: !Ref CoderSessionTokenSecret  
+          - Name: WorkshopRoleName
+            Value: !Ref WorkshopCoderRole
           - Name: CLOUDFRONT_DISTRIBUTION_ID
             Value: !Ref CoderCloudFrontDistribution
           - Name: CLOUDFRONT_DOMAIN
@@ -1013,18 +1015,18 @@ Resources:
                       --cluster-name ${EKSClusterName} \
                       --namespace coder \
                       --service-account coder \
-                      --role-arn arn:aws:iam::$ACCOUNT_ID:role/coder-and-aws-workshop-user
+                      --role-arn arn:aws:iam::$ACCOUNT_ID:role/${WorkshopRoleName}
 
                       echo "Configuring IRSA for Fargate workspace pods..."
                       
                       chmod +x "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh"
                       "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh" \
                         "${EKSClusterName}" \
-                        "coder-and-aws-workshop-user" \
+                        "${WorkshopRoleName}" \
                         "coder-ws" \
                         "coder-ws"
                       
-                      sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
+                      sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/${WorkshopRoleName}|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
                         | kubectl apply -f -
                       echo "Created coder-ws service account with IRSA annotation"
                     fi
@@ -1204,7 +1206,7 @@ Resources:
                         ( cd "$CODER_GITOPS_DIR/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
                         echo "=== AI Provider Configuration Complete ==="
                       else
-                        CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id partner-coder-session-token --query SecretString --output text)
+                        CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CoderSessionTokenSecretArn" --query SecretString --output text)
                         echo "Session token received successfully"
                         
                         echo "Logging in to Coder"
@@ -1244,7 +1246,7 @@ Resources:
                     echo "Setting SSM parameters..."
                     echo "SSM_CODER_URL: ${SSM_CODER_URL}"
                     aws configure set cli_follow_urlparam false
-                    aws ssm put-parameter --name "coder-cloudfront-url" --value "${SSM_CODER_URL}" --type "String" --overwrite
+                    aws ssm put-parameter --name "/eks/${EKSClusterName}/cloudfront-url" --value "${SSM_CODER_URL}" --type "String" --overwrite
                     aws ssm put-parameter --name "/eks/${EKSClusterName}/cluster-name" --value "${EKSClusterName}" --type "String" --overwrite
                     aws ssm put-parameter --name "/eks/${EKSClusterName}/region" --value "${AWSRegion}" --type "String" --overwrite
                   fi

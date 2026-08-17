@@ -291,7 +291,7 @@ terraform apply -auto-approve
 - **EFS** — persistent workspace home directories (Fargate-compatible)
 - **ECR** — three `coder-workspace-*` repositories holding the Fargate workspace images built by the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml)
 - **Secrets Manager** — admin password, session token, Bedrock Mantle API key
-- **IAM** — `coder-and-aws-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.)
+- **IAM** — `<cluster>-coder-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.), where `<cluster>` is `EKSClusterName` so multiple environments can coexist in one account
 
 ## Troubleshooting
 
