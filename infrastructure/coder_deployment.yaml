@@ -920,7 +920,10 @@ Resources:
               commands:
                 - echo ">>> creating EKS cluster in region $AWSRegion with Auto Mode"
                 - |
-                  if [ "$RetryFlag" != "True" ]; then
+                  if aws eks describe-cluster --name "${EKSClusterName}" --region "${AWSRegion}" >/dev/null 2>&1; then
+                    echo "EKS cluster ${EKSClusterName} already exists; skipping creation (idempotent re-run)."
+                    export BUILD_SUCCESS=true
+                  elif [ "$RetryFlag" != "True" ]; then
                     if eksctl create cluster -f cluster-config.yaml; then
                       export BUILD_SUCCESS=true
                       echo "EKS cluster creation successful"
@@ -1035,21 +1038,26 @@ Resources:
                     fi
 
                     if [ -n "$CODER_LB_HOSTNAME" ]; then
-                      echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
+                      CURRENT_CF_ORIGIN=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'DistributionConfig.Origins.Items[0].DomainName' --output text 2>/dev/null || echo "")
+                      if [ "$CURRENT_CF_ORIGIN" = "$CODER_LB_HOSTNAME" ]; then
+                        echo "CloudFront origin already points to $CODER_LB_HOSTNAME; skipping distribution update (idempotent re-run)."
+                      else
+                        echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
 
-                      CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
-                      ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
-                      DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
+                        CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
+                        ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
+                        DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
 
-                      UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
-                        '.Origins.Items[0].DomainName = $hostname')
+                        UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
+                          '.Origins.Items[0].DomainName = $hostname')
 
-                      echo "$UPDATED_CONFIG" > updated-cf-config.json
+                        echo "$UPDATED_CONFIG" > updated-cf-config.json
 
-                      aws cloudfront update-distribution \
-                        --id "$CLOUDFRONT_DISTRIBUTION_ID" \
-                        --distribution-config file://updated-cf-config.json \
-                        --if-match "$ETAG"
+                        aws cloudfront update-distribution \
+                          --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+                          --distribution-config file://updated-cf-config.json \
+                          --if-match "$ETAG"
+                      fi
 
                       DISTRIBUTION_ID="$CLOUDFRONT_DISTRIBUTION_ID"
 
