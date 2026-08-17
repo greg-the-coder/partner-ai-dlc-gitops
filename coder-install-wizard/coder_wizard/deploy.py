@@ -236,6 +236,61 @@ FAILURE_STATUSES = {
     "UPDATE_FAILED", "DELETE_FAILED",
 }
 
+# A stack in one of these states exists and is healthy/usable.
+SUCCESS_STATUSES = {"CREATE_COMPLETE", "UPDATE_COMPLETE"}
+
+# A stack in one of these states exists but is unusable and must be deleted
+# before it can be recreated (e.g. a failed create that rolled back, or an
+# unexecuted change-set stub).
+RECREATE_STATUSES = {
+    "ROLLBACK_COMPLETE", "ROLLBACK_FAILED", "CREATE_FAILED",
+    "DELETE_FAILED", "UPDATE_ROLLBACK_FAILED", "REVIEW_IN_PROGRESS",
+}
+
+
+def get_stack_status(stack_name: str, region: str) -> Optional[str]:
+    """Return the CloudFormation stack status, or None if the stack does not exist."""
+    return _cfn_stack_status(stack_name, region)
+
+
+def is_in_progress(status: Optional[str]) -> bool:
+    return bool(status) and status.endswith("_IN_PROGRESS") and status != "REVIEW_IN_PROGRESS"
+
+
+def delete_stack(
+    stack_name: str,
+    region: str,
+    on_event: Callable[[StackEvent], None] | None = None,
+    poll_interval: int = 15,
+) -> DeployResult:
+    """Delete a CloudFormation stack and wait until it is gone (or DELETE_FAILED)."""
+    code, _, err = _aws([
+        "cloudformation", "delete-stack",
+        "--stack-name", stack_name,
+        "--region", region,
+    ])
+    if code != 0:
+        return DeployResult(stack_name=stack_name, success=False, error=err)
+
+    last_ts: Optional[str] = None
+    while True:
+        status = _cfn_stack_status(stack_name, region)
+
+        if on_event:
+            new_events, last_ts = _cfn_recent_events(stack_name, region, last_ts)
+            for evt in new_events:
+                on_event(evt)
+
+        # describe-stacks by name returns nothing once the stack is fully deleted.
+        if status is None or status == "DELETE_COMPLETE":
+            return DeployResult(stack_name=stack_name, success=True)
+        if status == "DELETE_FAILED":
+            return DeployResult(
+                stack_name=stack_name, success=False,
+                error="Stack ended in status: DELETE_FAILED",
+            )
+        time.sleep(poll_interval)
+
 
 def deploy_stack(
     stack_name: str,
