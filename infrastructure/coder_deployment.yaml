@@ -957,6 +957,9 @@ Resources:
                     
                     git clone $CoderGitOpsTemplateRepoURL
                     CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
+                    # Absolute path to the clone — later steps cd into subdirs (e.g.
+                    # templates/), so relative "$CODER_GITOPS_DIR/..." paths break.
+                    CODER_GITOPS_ABS="$(cd "$CODER_GITOPS_DIR" && pwd)"
 
                     cp "$CODER_GITOPS_DIR/infrastructure/k8s/gp3-storageclass.yaml" storageclass.yaml
                     cp "$CODER_GITOPS_DIR/infrastructure/helm/coder-values.yaml" coder-core-values-v2.yaml
@@ -1203,7 +1206,7 @@ Resources:
                         export BEDROCK_SMALL_FAST_MODEL="global.anthropic.claude-haiku-4-5-20251001-v1:0"
                         export BEDROCK_MANTLE_KEY
 
-                        ( cd "$CODER_GITOPS_DIR/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
+                        ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
                         echo "=== AI Provider Configuration Complete ==="
                       else
                         CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CoderSessionTokenSecretArn" --query SecretString --output text)
