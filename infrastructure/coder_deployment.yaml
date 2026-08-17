@@ -988,7 +988,7 @@ Resources:
                         --fargate-profile-name coder-workspaces \
                         --pod-execution-role-arn ${FargatePodExecutionRoleArn} \
                         --subnets ${FargateSubnet1} ${FargateSubnet2} \
-                        --selectors namespace=coder-ws,labels={compute=fargate}
+                        --selectors "namespace=coder-ws,labels={compute=fargate}"
                       
                       echo "Waiting for Fargate profile to become ACTIVE..."
                       aws eks wait fargate-profile-active \
