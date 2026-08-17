@@ -120,9 +120,40 @@ coder:
   # Hide the "Tasks" tab in the dashboard
   - name: CODER_HIDE_AI_TASKS
     value: "true"
+  # BYOK: allow users to bring their own model keys through the AI Gateway.
+  - name: CODER_AI_GATEWAY_ALLOW_BYOK
+    value: "true"
 
-  # Enable HA for Coderd
-  replicaCount: 1
+  # ---------------------------------------------------------------------
+  # Parity with the partner demo control plane (partner.coderdemo.io)
+  # ---------------------------------------------------------------------
+  # oauth2: OAuth2 provider endpoints. mcp-server-http: streamable HTTP MCP server.
+  - name: CODER_EXPERIMENTS
+    value: "oauth2,mcp-server-http"
+  # Allow embedding *.<wildcard> app subdomains (patched to the CloudFront domain at
+  # deploy time by the same sed that rewrites CODER_WILDCARD_ACCESS_URL below).
+  - name: CODER_ADDITIONAL_CSP_POLICY
+    value: "frame-src https://*.coder.example.com"
+
+  # ---------------------------------------------------------------------
+  # Premium / Enterprise features
+  # ---------------------------------------------------------------------
+  # A Coder Premium license is supplied at deploy time via the CloudFormation
+  # `CoderLicenseKey` parameter and applied with `coder licenses add`. The settings
+  # below are gated by that license and take effect once it is present:
+  #   * High availability -- running more than one coderd replica (replicaCount: 2)
+  #     REQUIRES a Premium/Enterprise license.
+  #   * Also unlocked by the license: multiple organizations, template RBAC/ACLs,
+  #     group & role sync, external provisioners, and appearance/branding.
+  # Optional premium toggles (uncomment as needed for a demo):
+  #- name: CODER_BROWSER_ONLY
+  #  value: "true"
+  #- name: CODER_DISABLE_PATH_APPS
+  #  value: "false"
+
+  # Enable HA for Coderd (requires a Premium/Enterprise license, supplied via
+  # the CoderLicenseKey deployment parameter).
+  replicaCount: 2
 
   resources:
     limits:

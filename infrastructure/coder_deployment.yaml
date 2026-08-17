@@ -9,7 +9,7 @@ Parameters:
   CoderVersion:
     Description: Coder version
     Type: String
-    Default: "2.34.4"
+    Default: "2.36.0"
 
   EKSClusterName:
     Description: Name of EKS Cluster
@@ -971,13 +971,19 @@ Resources:
                       
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/coder-workspace-rbac.yaml"
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml"
-                      
+
+                      # EC2 Spot workspace lane, auto-scaled by EKS Auto Mode.
+                      kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/spot-nodepool.yaml"
+
+                      # Fargate lane: only workspace pods labelled compute=fargate are
+                      # placed on Fargate; spot-lane pods (compute=spot) are excluded and
+                      # scheduled onto the coder-ws-spot NodePool instead.
                       aws eks create-fargate-profile \
                         --cluster-name ${EKSClusterName} \
                         --fargate-profile-name coder-workspaces \
                         --pod-execution-role-arn ${FargatePodExecutionRoleArn} \
                         --subnets ${FargateSubnet1} ${FargateSubnet2} \
-                        --selectors namespace=coder-ws
+                        --selectors namespace=coder-ws,labels={compute=fargate}
                       
                       echo "Waiting for Fargate profile to become ACTIVE..."
                       aws eks wait fargate-profile-active \
@@ -1184,131 +1190,18 @@ Resources:
                           BEDROCK_MANTLE_KEY="${EXISTING_SECRET}"
                         fi
 
-                        echo "Configuring AWS Bedrock (native) provider..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-6-v1\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
-                          || curl -sf -X PATCH \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-6-v1\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
-                        echo "Bedrock (native) provider configured."
+                        echo "=== Configuring Coder AI Providers + Models via Terraform (coderd) ==="
+                        # Providers and Coder Agents models are managed declaratively in
+                        # $CODER_GITOPS_DIR/ai-providers via the coderd Terraform provider,
+                        # replacing the direct /api/v2/ai/providers and
+                        # /api/experimental/chats/model-configs API calls.
+                        export CODER_AGENT_URL="${CODER_URL}"
+                        export BEDROCK_REGION BEDROCK_ENDPOINT BEDROCK_MANTLE_ENDPOINT
+                        export BEDROCK_MODEL="global.anthropic.claude-opus-4-6-v1"
+                        export BEDROCK_SMALL_FAST_MODEL="global.anthropic.claude-haiku-4-5-20251001-v1:0"
+                        export BEDROCK_MANTLE_KEY
 
-                        echo "Configuring OpenAI-compat Bedrock Mantle provider..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"openai\",\"name\":\"openai-compat\",\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}" \
-                          || curl -sf -X PATCH \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
-                          -d "{\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}"
-                        echo "OpenAI-compat Bedrock Mantle provider configured."
-
-                        echo "Configuring Chat Model Configs..."
-
-                        BEDROCK_PROVIDER_ID=$(curl -sf \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-                        echo "Bedrock provider ID: ${BEDROCK_PROVIDER_ID}"
-
-                        OPENAI_PROVIDER_ID=$(curl -sf \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
-                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-                        echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
-
-
-                        echo "Adding model: Claude Opus 4.6 (Bedrock)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-opus-4-6-v1\",
-                            \"display_name\": \"Claude Opus 4.6\",
-                            \"enabled\": true,
-                            \"is_default\": true,
-                            \"context_limit\": 1000000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 128000,
-                              \"provider_options\": {
-                                \"anthropic\": {
-                                  \"send_reasoning\": true,
-                                  \"effort\": \"high\"
-                                }
-                              }
-                            }
-                          }" || echo "  (may already exist)"
-
-                        echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-haiku-4-5-20251001-v1:0\",
-                            \"display_name\": \"Claude Haiku 4.5\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 200000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 64000,
-                              \"provider_options\": {
-                                \"anthropic\": {
-                                  \"send_reasoning\": true,
-                                  \"thinking\": {
-                                    \"budget_tokens\": 8192
-                                  }
-                                }
-                              }
-                            }
-                          }" || echo "  (may already exist)"
-
-
-                        echo "Adding model: OpenAI gpt-oss-120b (OpenAI-compat)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
-                            \"model\": \"openai.gpt-oss-120b\",
-                            \"display_name\": \"OpenAI gpt-oss-120b\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 128000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 8192
-                            }
-                          }" || echo "  (may already exist)"
-
-                        echo "Adding model: Devstral 2 (OpenAI-compat)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
-                            \"model\": \"mistral.devstral-2-123b\",
-                            \"display_name\": \"Devstral 2 123B\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 128000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 8192
-                            }
-                          }" || echo "  (may already exist)"
-
-                        echo "Chat Model Configs configured successfully."
+                        ( cd "$CODER_GITOPS_DIR/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
                         echo "=== AI Provider Configuration Complete ==="
                       else
                         CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id partner-coder-session-token --query SecretString --output text)

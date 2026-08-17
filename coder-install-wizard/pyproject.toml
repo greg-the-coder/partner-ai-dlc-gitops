@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "partner-coder-install-wizard"
+version = "0.2.0"
+description = "GenAI-assisted install wizard for the Partner AI-DLC Coder demo on AWS (Fargate + EC2 Spot, EFS, Bedrock)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["coder", "aws", "eks", "fargate", "spot", "efs", "devtools", "installer"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Installation/Setup",
+]
+
+# No third-party runtime deps — uses only the stdlib + the AWS CLI (expected in PATH).
+# kubectl is optional and only used to validate the EC2 Spot NodePool post-install.
+dependencies = []
+
+[project.scripts]
+partner-coder-wizard = "coder_wizard.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/greg-the-coder/partner-ai-dlc-gitops"
+Source   = "https://github.com/greg-the-coder/partner-ai-dlc-gitops"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["coder_wizard*"]

@@ -76,6 +76,29 @@ data "coder_parameter" "memory" {
 }
 
 
+# Compute lane: which schedulable surface this workspace runs on. The home
+# directory is EFS-backed (ReadWriteMany) in BOTH lanes; only pod scheduling differs.
+data "coder_parameter" "compute_lane" {
+  name         = "Compute Lane"
+  display_name = "Compute Lane"
+  description  = "fargate = serverless, Firecracker microVM isolation. spot = EC2 Spot node group, auto-scaled by EKS Auto Mode (lower cost, allows larger/GPU/privileged workloads). Home directory is on EFS in either lane."
+  type         = "string"
+  default      = "fargate"
+  mutable      = true
+  order        = 3
+  icon         = "/icon/aws.png"
+  option {
+    name  = "Fargate (serverless, isolated)"
+    value = "fargate"
+    icon  = "/icon/aws.png"
+  }
+  option {
+    name  = "EC2 Spot (auto-scaled, low cost)"
+    value = "spot"
+    icon  = "/icon/aws.png"
+  }
+}
+
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
@@ -317,6 +340,9 @@ resource "kubernetes_deployment" "dev" {
           "com.coder.workspace.name"   = data.coder_workspace.me.name
           "com.coder.user.id"          = data.coder_workspace_owner.me.id
           "com.coder.user.username"    = data.coder_workspace_owner.me.name
+          # Compute-lane selector: matched by the EKS Fargate profile
+          # (compute=fargate) or excluded by it (compute=spot -> EC2 Spot NodePool).
+          "compute"                    = data.coder_parameter.compute_lane.value
         }
       }
       spec {
@@ -325,6 +351,20 @@ resource "kubernetes_deployment" "dev" {
           fs_group    = 1000
         }
         service_account_name = "coder-ws"
+
+        # Spot lane: pin to the auto-scaled EKS Auto Mode Spot NodePool and tolerate
+        # its taint. Fargate lane: leave empty so the Fargate profile schedules the
+        # compute=fargate pod serverlessly.
+        node_selector = data.coder_parameter.compute_lane.value == "spot" ? { "coder.workspace/lane" = "spot" } : {}
+        dynamic "toleration" {
+          for_each = data.coder_parameter.compute_lane.value == "spot" ? [1] : []
+          content {
+            key      = "coder.workspace/lane"
+            operator = "Equal"
+            value    = "spot"
+            effect   = "NoSchedule"
+          }
+        }
         container {
           name              = "dev"
           image             = var.workspace_image

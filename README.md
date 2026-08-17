@@ -13,6 +13,10 @@ CloudFormation stack. Two capabilities are the focus of this platform:
 - **Fargate workspaces** — developer workspaces run on AWS Fargate (serverless pods), with
   persistent home directories backed by Amazon EFS. No worker nodes to manage or scale for
   workspace compute.
+- **EC2 Spot workspaces** — a second, standardized compute lane on an EKS Auto Mode **Spot
+  NodePool** (auto-scaled, scales to zero when idle) for cost-optimized, larger, GPU, or
+  privileged workloads. Home directories stay on Amazon EFS, so storage is identical across
+  both lanes; the lane is chosen per workspace via the **Compute Lane** template parameter.
 - **Coder Agents** — the built-in agentic coding assistant, wired to Amazon Bedrock (native)
   and Bedrock Mantle (OpenAI-compatible) so agents run entirely on AWS-hosted models.
 
@@ -100,7 +104,7 @@ suggest — inside guardrails the enterprise controls.
 
 | Component | Purpose |
 |-----------|---------|
-| EKS Fargate profile `coder-workspaces` | Runs every workspace pod in the `coder-ws` namespace serverlessly |
+| EKS Fargate profile `coder-workspaces` | Runs workspace pods labelled `compute=fargate` in the `coder-ws` namespace serverlessly |
 | Dedicated Fargate subnets (2 AZs) | Private subnets for Fargate pod ENIs |
 | EFS file system (encrypted, elastic throughput) | Persistent `/home/coder` per workspace, survives restarts |
 | EFS mount targets + NFS security group | Reachable from Fargate pods over port 2049 within the VPC |
@@ -109,6 +113,25 @@ suggest — inside guardrails the enterprise controls.
 
 Workspace templates create an EFS access point + PV/PVC per workspace and mount it at
 `/home/coder`. Tools installed outside the home directory live in the container image.
+
+## Workspace compute lanes (Fargate + EC2 Spot)
+
+Every template exposes a **Compute Lane** parameter so a workspace can run on either lane
+while keeping an identical **EFS-backed `/home/coder`**:
+
+| Lane | Where it runs | Selected by | Best for |
+|------|---------------|-------------|----------|
+| `fargate` (default) | EKS **Fargate profile** `coder-workspaces` | pod label `compute=fargate` matched by the profile selector `namespace=coder-ws,labels={compute=fargate}` | Strong per-workspace Firecracker isolation; serverless, nothing to scale |
+| `spot` | EKS Auto Mode **Spot NodePool** `coder-ws-spot` | pod `nodeSelector` `coder.workspace/lane=spot` + toleration for the matching `NoSchedule` taint | Cost-optimized (Spot), larger pods, GPU, privileged/Docker workloads |
+
+The Spot lane is a Karpenter `NodePool` (`infrastructure/k8s/spot-nodepool.yaml`) that plugs
+into **EKS Auto Mode**: it references Auto Mode's built-in `default` NodeClass (inheriting
+the node IAM role, subnets, and security groups) and auto-scales on demand, consolidating
+and scaling to zero when idle. Because the lane carries a taint, only opted-in workspaces
+land there; everything else (including Fargate-lane pods) is unaffected.
+
+**Storage is the single standard:** both lanes use the same per-workspace EFS access point +
+static PV/PVC (`efs-static`, `ReadWriteMany`) mounted at `/home/coder`.
 
 ## Coder Agents
 
@@ -140,7 +163,8 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 | `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code AI assistant with task automation. |
 | `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
 
-All templates run on Fargate with EFS-backed persistent home directories.
+All templates support both compute lanes (Fargate default, EC2 Spot optional) via the
+**Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
 
 ## Prerequisites
 
@@ -202,13 +226,16 @@ used by the Fargate templates:
    - `CoderAdminEmail`, `CoderAdminUser`, `CoderAdminPassword`, `CoderAdminName`
 3. Optional parameters (defaults shown):
    - `EKSClusterName` (`coder-aws-cluster`) — **use the same value as Step 1**,
-     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.34.4`), `CoderPremiumTrial` (`false`),
-     `CoderGitOpsTemplateRepoURL`, `RetryFlag` (`False`)
+     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.36.0`),
+     `CoderLicenseKey` (empty by default — supply a **Coder Premium** license JWT to enable
+     premium features such as HA/multi-replica `coderd`; it is applied automatically at
+     deploy via `coder licenses add`), `CoderGitOpsTemplateRepoURL`, `RetryFlag` (`False`)
 4. Acknowledge IAM resource creation and create the stack (~30–45 minutes).
 
 The stack provisions networking, Aurora PostgreSQL, the EKS cluster (Auto Mode + Fargate
-profile), EFS storage, installs Coder via Helm, configures CloudFront, deploys templates
-(pointing at the ECR images from Step 1), and configures Coder Agents providers/models.
+profile + EC2 Spot NodePool), EFS storage, installs Coder via Helm, applies the Premium
+license (if provided), configures CloudFront, deploys templates (pointing at the ECR images
+from Step 1), and configures Coder Agents providers/models.
 
 Monitor progress in the CloudFormation **Events** tab and the CodeBuild logs
 (`/aws/codebuild/CodeBuild-<StackName>`).
@@ -242,7 +269,7 @@ terraform apply -auto-approve
 
 ## Architecture Summary
 
-- **EKS** — Auto Mode (control plane + system workloads) with a dedicated **Fargate profile** for workspaces
+- **EKS** — Auto Mode (control plane + system workloads) with two workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods) and an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods)
 - **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS)
 - **CloudFront + Network Load Balancer** — secure global access to Coder
 - **VPC** — public/private/Fargate subnets across 2 AZs, NAT gateways for egress
@@ -258,6 +285,7 @@ terraform apply -auto-approve
 | Stack creation fails | CodeBuild logs `/aws/codebuild/CodeBuild-<StackName>`; service quotas; IAM permissions |
 | Cannot reach `CoderURL` | CloudFront status is `Deployed`; NLB target health; `kubectl get pods -n coder` |
 | Workspace won't start | Fargate profile is `ACTIVE`; `kubectl get sc` shows `efs-static`; EFS mount targets healthy; `kubectl get pvc -n coder-ws` |
+| Spot-lane workspace stuck `Pending` | `kubectl get nodepool coder-ws-spot`; confirm EKS Auto Mode can launch Spot capacity in the AZs; pod carries the `coder.workspace/lane=spot` toleration; Spot capacity available for the requested instance types |
 | Workspace image pull error / `ImagePullBackOff` | Step 1 image pipeline ran successfully; each `<EKSClusterName>/coder-workspace-*` ECR repo has a `latest` image; `EKSClusterName` and Region match between both stacks |
 | Coder Agent model errors | Bedrock model access in us-east-1; provider config via `/api/v2/ai/providers`; Bedrock Mantle secret populated |
 
