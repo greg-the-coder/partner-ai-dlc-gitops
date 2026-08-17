@@ -9,7 +9,7 @@ Parameters:
   CoderVersion:
     Description: Coder version
     Type: String
-    Default: "2.34.4"
+    Default: "2.36.0"
 
   EKSClusterName:
     Description: Name of EKS Cluster
@@ -971,13 +971,19 @@ Resources:
                       
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/coder-workspace-rbac.yaml"
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml"
-                      
+
+                      # EC2 Spot workspace lane, auto-scaled by EKS Auto Mode.
+                      kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/spot-nodepool.yaml"
+
+                      # Fargate lane: only workspace pods labelled compute=fargate are
+                      # placed on Fargate; spot-lane pods (compute=spot) are excluded and
+                      # scheduled onto the coder-ws-spot NodePool instead.
                       aws eks create-fargate-profile \
                         --cluster-name ${EKSClusterName} \
                         --fargate-profile-name coder-workspaces \
                         --pod-execution-role-arn ${FargatePodExecutionRoleArn} \
                         --subnets ${FargateSubnet1} ${FargateSubnet2} \
-                        --selectors namespace=coder-ws
+                        --selectors namespace=coder-ws,labels={compute=fargate}
                       
                       echo "Waiting for Fargate profile to become ACTIVE..."
                       aws eks wait fargate-profile-active \
