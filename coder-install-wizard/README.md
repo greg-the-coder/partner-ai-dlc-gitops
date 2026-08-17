@@ -191,6 +191,21 @@ skipped, not fatal):
 - **Lifecycle:** staged templates are transient, so objects expire after **7 days** and
   incomplete multipart uploads are aborted after 1 day.
 
+## Re-running the wizard
+
+`deploy` is safe to re-run. Before Step 3 it checks the image pipeline stack
+(`<cluster>-image-pipeline`) and:
+
+- **healthy** (`CREATE_COMPLETE` / `UPDATE_COMPLETE`) — skips the image build and goes
+  straight to the core stack (images are already in ECR);
+- **failed / unusable** (`ROLLBACK_COMPLETE`, `CREATE_FAILED`, `REVIEW_IN_PROGRESS`, …)
+  — deletes the stack and recreates it;
+- **in progress** (`*_IN_PROGRESS`) — stops and asks you to wait for the current
+  operation to finish, then re-run.
+
+To force a rebuild of a healthy pipeline, delete the stack or re-run its CodeBuild
+project (`<cluster>-workspace-image-build`).
+
 ## Architecture of the Wizard
 
 ```

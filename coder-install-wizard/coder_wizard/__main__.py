@@ -386,9 +386,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         return 0
 
     pipeline_stack = f"{args.cluster}-image-pipeline"
-    _section(f"Step 3 — Deploy Image Pipeline Stack ({pipeline_stack})")
-    print(info("This builds and pushes the workspace images to ECR (~10–20 min)."))
-    print()
+    _section(f"Step 3 — Image Pipeline Stack ({pipeline_stack})")
 
     admin_password = getattr(args, "admin_password", "") or _generate_password()
     if not getattr(args, "admin_password", ""):
@@ -402,31 +400,65 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         if evt.reason:
             print(dim(f"            {evt.reason}"))
 
-    pipeline_result = deploy.deploy_stack(
-        stack_name=pipeline_stack,
-        template_path=args.pipeline_template,
-        parameters=pipeline_params,
-        region=args.region,
-        on_event=_on_pipeline_event,
-    )
+    # ── Pre-check: is the image pipeline stack already present? ────────────
+    #   healthy (CREATE/UPDATE_COMPLETE) -> skip the build
+    #   in progress                     -> ask the user to wait and re-run
+    #   failed/unusable                  -> delete, then recreate
+    skip_pipeline = False
+    pstatus = deploy.get_stack_status(pipeline_stack, args.region)
+    if pstatus in deploy.SUCCESS_STATUSES:
+        print(ok(f"Image pipeline stack already exists and is healthy ({pstatus})."))
+        print(info("Skipping image build. (To force a rebuild, delete the stack or re-run "
+                   f"the CodeBuild project '{args.cluster}-workspace-image-build'.)"))
+        skip_pipeline = True
+    elif deploy.is_in_progress(pstatus):
+        print(fail(f"Image pipeline stack is currently {pstatus}."))
+        print(info("Wait for the in-progress operation to finish, then re-run the wizard."))
+        return 1
+    elif pstatus in deploy.RECREATE_STATUSES:
+        print(warn(f"Image pipeline stack exists in a failed state ({pstatus}). "
+                   "Deleting it and recreating..."))
+        del_result = deploy.delete_stack(pipeline_stack, args.region, on_event=_on_pipeline_event)
+        if not del_result.success:
+            print()
+            print(fail(f"Could not delete the failed pipeline stack: {del_result.error}"))
+            print(info("Delete it manually in the CloudFormation console, then re-run."))
+            return 1
+        print(ok("Failed pipeline stack deleted; recreating."))
+    elif pstatus is not None:
+        print(fail(f"Image pipeline stack is in an unexpected state '{pstatus}'."))
+        print(info("Resolve it in the CloudFormation console, then re-run the wizard."))
+        return 1
 
-    if not pipeline_result.success:
+    if not skip_pipeline:
+        print(info("Building and pushing the workspace images to ECR (~10–20 min)."))
         print()
-        print(fail(f"Image pipeline stack failed: {pipeline_result.error}"))
-        print(info(f"Check CodeBuild logs: /aws/codebuild/{args.cluster}-workspace-image-build"))
-        return 1
 
-    print()
-    print(ok("Image pipeline stack complete. Waiting for CodeBuild to finish building images..."))
+        pipeline_result = deploy.deploy_stack(
+            stack_name=pipeline_stack,
+            template_path=args.pipeline_template,
+            parameters=pipeline_params,
+            region=args.region,
+            on_event=_on_pipeline_event,
+        )
 
-    codebuild_project = f"{args.cluster}-workspace-image-build"
-    built = deploy.wait_for_codebuild(codebuild_project, args.region, timeout=2400)
-    if not built:
-        print(fail("CodeBuild workspace image build did not complete successfully."))
-        print(info(f"Check logs: aws logs tail /aws/codebuild/CodeBuild-{pipeline_stack}"))
-        return 1
+        if not pipeline_result.success:
+            print()
+            print(fail(f"Image pipeline stack failed: {pipeline_result.error}"))
+            print(info(f"Check CodeBuild logs: /aws/codebuild/{args.cluster}-workspace-image-build"))
+            return 1
 
-    print(ok("Workspace images built and pushed to ECR."))
+        print()
+        print(ok("Image pipeline stack complete. Waiting for CodeBuild to finish building images..."))
+
+        codebuild_project = f"{args.cluster}-workspace-image-build"
+        built = deploy.wait_for_codebuild(codebuild_project, args.region, timeout=2400)
+        if not built:
+            print(fail("CodeBuild workspace image build did not complete successfully."))
+            print(info(f"Check logs: aws logs tail /aws/codebuild/CodeBuild-{pipeline_stack}"))
+            return 1
+
+        print(ok("Workspace images built and pushed to ECR."))
 
     # ── 4. Core Coder stack ────────────────────────────────────────────────
     core_stack = f"{args.cluster}-coder"
