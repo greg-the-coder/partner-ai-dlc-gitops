@@ -91,6 +91,38 @@ def _ensure_template_bucket(region: str) -> Optional[str]:
          "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"],
         capture_output=True, text=True,
     )
+
+    # Default encryption: SSE-S3 (AES256), or SSE-KMS if a CMK is supplied via
+    # CODER_WIZARD_TEMPLATE_KMS_KEY_ARN. Best-effort: skip silently if the caller
+    # lacks s3:PutEncryptionConfiguration.
+    kms_key = os.environ.get("CODER_WIZARD_TEMPLATE_KMS_KEY_ARN", "").strip()
+    if kms_key:
+        enc = {"Rules": [{
+            "ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "aws:kms", "KMSMasterKeyID": kms_key},
+            "BucketKeyEnabled": True,
+        }]}
+    else:
+        enc = {"Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]}
+    subprocess.run(
+        ["aws", "s3api", "put-bucket-encryption", "--bucket", bucket, "--region", region,
+         "--server-side-encryption-configuration", json.dumps(enc)],
+        capture_output=True, text=True,
+    )
+
+    # Staged templates are transient (needed only at stack create/update submission):
+    # expire after 7 days and abort stale multipart uploads after 1 day. Best-effort.
+    lifecycle = {"Rules": [{
+        "ID": "expire-staged-templates",
+        "Filter": {"Prefix": ""},
+        "Status": "Enabled",
+        "Expiration": {"Days": 7},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+    }]}
+    subprocess.run(
+        ["aws", "s3api", "put-bucket-lifecycle-configuration", "--bucket", bucket, "--region", region,
+         "--lifecycle-configuration", json.dumps(lifecycle)],
+        capture_output=True, text=True,
+    )
     return bucket
 
 

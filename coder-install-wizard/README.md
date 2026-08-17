@@ -179,7 +179,17 @@ The wizard handles this automatically: `deploy` (and the generated `deploy.sh`) 
 small templates with `--template-body`, but stage anything over the limit to a private,
 public-access-blocked S3 bucket (`coder-wizard-templates-<account>-<region>`) and deploy
 with `--template-url`. This is why the caller needs S3 permissions
-(`s3:CreateBucket`, `s3:PutObject`, `s3:PutBucketPublicAccessBlock`, `s3:GetObject`).
+(`s3:CreateBucket`, `s3:PutObject`, `s3:GetObject`, `s3:PutBucketPublicAccessBlock`,
+`s3:PutEncryptionConfiguration`, `s3:PutLifecycleConfiguration`).
+
+On creation the staging bucket is hardened (best-effort — missing permissions are
+skipped, not fatal):
+
+- **Encryption:** SSE-S3 (`AES256`) by default. Set `CODER_WIZARD_TEMPLATE_KMS_KEY_ARN`
+  to a CMK ARN to use SSE-KMS with an S3 Bucket Key instead (the caller then also needs
+  `kms:GenerateDataKey`/`kms:Decrypt` on that key).
+- **Lifecycle:** staged templates are transient, so objects expire after **7 days** and
+  incomplete multipart uploads are aborted after 1 day.
 
 ## Architecture of the Wizard
 
