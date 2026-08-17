@@ -222,6 +222,21 @@ used by the Fargate templates:
 
 1. Open the AWS CloudFormation console and create a stack from
    [`infrastructure/coder_deployment.yaml`](./infrastructure/coder_deployment.yaml).
+
+   > **Deploying from the CLI?** `coder_deployment.yaml` is larger than CloudFormation's
+   > **51,200-byte inline limit**, so `aws cloudformation create-stack --template-body
+   > file://...` will fail with *"Member must have length less than or equal to 51200"*.
+   > Upload the template to S3 and use `--template-url` instead:
+   >
+   > ```bash
+   > aws s3 cp infrastructure/coder_deployment.yaml s3://<your-bucket>/coder_deployment.yaml
+   > aws cloudformation create-stack --stack-name <name> \
+   >   --template-url https://<your-bucket>.s3.<region>.amazonaws.com/coder_deployment.yaml \
+   >   --parameters ... --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --region <region>
+   > ```
+   >
+   > The **console** "upload a template file" option and the **install wizard** both stage
+   > the template to S3 automatically, so they are unaffected.
 2. Set the required parameters:
    - `CoderAdminEmail`, `CoderAdminUser`, `CoderAdminPassword`, `CoderAdminName`
 3. Optional parameters (defaults shown):

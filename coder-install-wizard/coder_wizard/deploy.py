@@ -6,10 +6,16 @@ streams real-time events back to the caller, and waits for completion.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+# CloudFormation rejects an inline --template-body larger than this many bytes.
+# Larger templates must be uploaded to S3 and referenced with --template-url
+# (the S3 object limit is ~1 MB).
+TEMPLATE_BODY_MAX_BYTES = 51200
 
 
 @dataclass
@@ -46,6 +52,118 @@ def _aws_json(args: list[str]) -> tuple[int, dict | list | None]:
         return 0, json.loads(out)
     except json.JSONDecodeError:
         return 0, None
+
+
+def _account_id() -> str:
+    code, out, _ = _aws(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
+    return out.strip() if code == 0 else ""
+
+
+def _ensure_template_bucket(region: str) -> Optional[str]:
+    """Ensure a private S3 bucket exists for staging large CloudFormation templates.
+
+    Returns the bucket name, or None if it could not be created.
+    """
+    account = _account_id()
+    if not account:
+        return None
+    bucket = f"coder-wizard-templates-{account}-{region}"
+
+    # head-bucket succeeds if it already exists and we own it.
+    head = subprocess.run(
+        ["aws", "s3api", "head-bucket", "--bucket", bucket, "--region", region],
+        capture_output=True, text=True,
+    )
+    if head.returncode == 0:
+        return bucket
+
+    create = ["aws", "s3api", "create-bucket", "--bucket", bucket, "--region", region]
+    if region != "us-east-1":
+        create += ["--create-bucket-configuration", f"LocationConstraint={region}"]
+    res = subprocess.run(create, capture_output=True, text=True)
+    if res.returncode != 0 and "BucketAlreadyOwnedByYou" not in res.stderr:
+        return None
+
+    # Block public access; templates are fetched by CloudFormation using the caller's creds.
+    subprocess.run(
+        ["aws", "s3api", "put-public-access-block", "--bucket", bucket, "--region", region,
+         "--public-access-block-configuration",
+         "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"],
+        capture_output=True, text=True,
+    )
+
+    # Default encryption: SSE-S3 (AES256), or SSE-KMS if a CMK is supplied via
+    # CODER_WIZARD_TEMPLATE_KMS_KEY_ARN. Best-effort: skip silently if the caller
+    # lacks s3:PutEncryptionConfiguration.
+    kms_key = os.environ.get("CODER_WIZARD_TEMPLATE_KMS_KEY_ARN", "").strip()
+    if kms_key:
+        enc = {"Rules": [{
+            "ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "aws:kms", "KMSMasterKeyID": kms_key},
+            "BucketKeyEnabled": True,
+        }]}
+    else:
+        enc = {"Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]}
+    subprocess.run(
+        ["aws", "s3api", "put-bucket-encryption", "--bucket", bucket, "--region", region,
+         "--server-side-encryption-configuration", json.dumps(enc)],
+        capture_output=True, text=True,
+    )
+
+    # Staged templates are transient (needed only at stack create/update submission):
+    # expire after 7 days and abort stale multipart uploads after 1 day. Best-effort.
+    lifecycle = {"Rules": [{
+        "ID": "expire-staged-templates",
+        "Filter": {"Prefix": ""},
+        "Status": "Enabled",
+        "Expiration": {"Days": 7},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+    }]}
+    subprocess.run(
+        ["aws", "s3api", "put-bucket-lifecycle-configuration", "--bucket", bucket, "--region", region,
+         "--lifecycle-configuration", json.dumps(lifecycle)],
+        capture_output=True, text=True,
+    )
+    return bucket
+
+
+def _upload_template_to_s3(template_path: str, region: str, stack_name: str) -> Optional[str]:
+    """Upload a template to S3 and return an https URL usable as --template-url."""
+    bucket = _ensure_template_bucket(region)
+    if not bucket:
+        return None
+    key = f"{stack_name}/{int(time.time())}-{os.path.basename(template_path)}"
+    cp = subprocess.run(
+        ["aws", "s3", "cp", template_path, f"s3://{bucket}/{key}", "--region", region],
+        capture_output=True, text=True,
+    )
+    if cp.returncode != 0:
+        return None
+    host = "s3.amazonaws.com" if region == "us-east-1" else f"s3.{region}.amazonaws.com"
+    return f"https://{bucket}.{host}/{key}"
+
+
+def _template_args(template_path: str, region: str, stack_name: str) -> tuple[list[str], Optional[str]]:
+    """Return the CloudFormation CLI template argument.
+
+    Uses --template-body for small templates; for templates over the inline
+    51,200-byte API limit, stages the file in S3 and uses --template-url.
+    Returns (args, error_message).
+    """
+    try:
+        size = os.path.getsize(template_path)
+    except OSError as e:
+        return [], f"template not found: {e}"
+
+    if size <= TEMPLATE_BODY_MAX_BYTES:
+        return ["--template-body", f"file://{template_path}"], None
+
+    url = _upload_template_to_s3(template_path, region, stack_name)
+    if not url:
+        return [], (
+            f"template is {size} bytes (> {TEMPLATE_BODY_MAX_BYTES} inline limit) and could not "
+            f"be staged to S3. Ensure the caller can create/write an S3 bucket in {region}."
+        )
+    return ["--template-url", url], None
 
 
 def _cfn_stack_status(stack_name: str, region: str) -> Optional[str]:
@@ -135,10 +253,14 @@ def deploy_stack(
         for k, v in parameters.items()
     ]
 
+    template_args, tmpl_err = _template_args(template_path, region, stack_name)
+    if tmpl_err:
+        return DeployResult(stack_name=stack_name, success=False, error=tmpl_err)
+
     create_args = [
         "cloudformation", "create-stack",
         "--stack-name", stack_name,
-        "--template-body", f"file://{template_path}",
+    ] + template_args + [
         "--capabilities", "CAPABILITY_IAM", "CAPABILITY_NAMED_IAM",
         "--region", region,
         "--parameters",

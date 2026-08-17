@@ -42,7 +42,8 @@ It replaces the manual two-stack README process with:
 
 - Python 3.10+
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) configured (`aws configure` or `aws sso login`)
-- IAM permissions to create EKS, VPC, Aurora, CloudFront, EFS, ECR, CodeBuild, IAM, Lambda, and Secrets Manager resources
+- IAM permissions to create EKS, VPC, Aurora, CloudFront, EFS, ECR, CodeBuild, IAM, Lambda, S3, and Secrets Manager resources
+  (S3 is used to stage the core template — see [Large templates](#large-templates))
 - The `partner-ai-dlc-gitops` repository cloned locally
 - (Optional) `kubectl` — only used to validate the EC2 Spot NodePool post-install
 
@@ -163,6 +164,32 @@ The wizard captures the CloudFormation inputs teams change most often:
 | EFS File System | EFS is in `available` state |
 
 ---
+
+## Large templates
+
+`infrastructure/coder_deployment.yaml` exceeds CloudFormation's **51,200-byte inline
+`--template-body` limit** (it is ~57 KB). A raw `aws cloudformation create-stack
+--template-body file://...` therefore fails with:
+
+```
+'templateBody' failed to satisfy constraint: Member must have length less than or equal to 51200
+```
+
+The wizard handles this automatically: `deploy` (and the generated `deploy.sh`) inline
+small templates with `--template-body`, but stage anything over the limit to a private,
+public-access-blocked S3 bucket (`coder-wizard-templates-<account>-<region>`) and deploy
+with `--template-url`. This is why the caller needs S3 permissions
+(`s3:CreateBucket`, `s3:PutObject`, `s3:GetObject`, `s3:PutBucketPublicAccessBlock`,
+`s3:PutEncryptionConfiguration`, `s3:PutLifecycleConfiguration`).
+
+On creation the staging bucket is hardened (best-effort — missing permissions are
+skipped, not fatal):
+
+- **Encryption:** SSE-S3 (`AES256`) by default. Set `CODER_WIZARD_TEMPLATE_KMS_KEY_ARN`
+  to a CMK ARN to use SSE-KMS with an S3 Bucket Key instead (the caller then also needs
+  `kms:GenerateDataKey`/`kms:Decrypt` on that key).
+- **Lifecycle:** staged templates are transient, so objects expire after **7 days** and
+  incomplete multipart uploads are aborted after 1 day.
 
 ## Architecture of the Wizard
 
