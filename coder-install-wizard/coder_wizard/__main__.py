@@ -271,8 +271,16 @@ def _retry_args() -> argparse.Namespace:
     return ra
 
 
+def _eks_cluster_exists(cluster: str, region: str) -> bool:
+    r = subprocess.run(
+        ["aws", "eks", "describe-cluster", "--name", cluster, "--region", region],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0
+
+
 def _prepare_stack_for_create(stack_name: str, region: str, label: str,
-                              on_event) -> str:
+                              on_event, eks_cluster: str | None = None) -> str:
     """Assess an existing CloudFormation stack before (re)creating it.
 
     Returns one of: 'create' (proceed to create-stack), 'skip' (already healthy),
@@ -289,6 +297,17 @@ def _prepare_stack_for_create(stack_name: str, region: str, label: str,
         print(info("Wait for the in-progress operation to finish, then re-run."))
         return "abort"
     if status in deploy.RECREATE_STATUSES:
+        if eks_cluster and _eks_cluster_exists(eks_cluster, region):
+            print(fail(f"{label} stack is {status}, but EKS cluster '{eks_cluster}' still exists."))
+            print(info("Refusing to auto-delete: this stack owns the VPC the cluster runs in, so a "
+                       "delete hits a DependencyViolation and can orphan resources. Recover manually:"))
+            print(info(f"  1) eksctl delete cluster --name {eks_cluster} --region {region} --wait"))
+            print(info(f"  2) aws cloudformation delete-stack --stack-name {stack_name} --region {region}"))
+            print(info(f"     aws cloudformation wait stack-delete-complete --stack-name {stack_name} --region {region}"))
+            print(info("  3) re-run the wizard for a fresh deploy."))
+            print(info("  (Aurora/EFS use DeletionPolicy: Retain, so data survives step 2 — clean up or "
+                       "reattach the retained resources as needed.)"))
+            return "abort"
         print(warn(f"{label} stack exists in a failed state ({status}). Deleting and recreating..."))
         res = deploy.delete_stack(stack_name, region, on_event=on_event)
         if not res.success:
@@ -597,7 +616,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     # Assess the existing core stack: skip if healthy, delete+recreate if failed,
     # abort if mid-operation. On --retry this recreates with RetryFlag=True, and the
     # buildspec's idempotency checks reuse the existing EKS cluster / CloudFront.
-    core_action = _prepare_stack_for_create(core_stack, args.region, "Core Coder", _on_core_event)
+    core_action = _prepare_stack_for_create(core_stack, args.region, "Core Coder", _on_core_event, eks_cluster=args.cluster)
     if core_action == "abort":
         return 1
 
@@ -610,6 +629,8 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     else:
         print(info("This provisions EKS (Auto Mode) + Fargate profile + EC2 Spot NodePool, "
                    "Aurora, EFS, CloudFront, installs Coder, and applies the license (~35–45 min)."))
+        print(info("Rollback is disabled (--on-failure DO_NOTHING): on failure the stack is left in "
+                   "place so Aurora/EFS and the EKS cluster survive for diagnosis or retry."))
         print()
         core_result = deploy.deploy_stack(
             stack_name=core_stack,
@@ -617,6 +638,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
             parameters=core_params,
             region=args.region,
             on_event=_on_core_event,
+            on_failure="DO_NOTHING",
         )
         if not core_result.success:
             print()

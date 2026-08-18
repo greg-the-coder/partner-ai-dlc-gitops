@@ -653,6 +653,8 @@ Resources:
 
   EfsFileSystem:
     Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Encrypted: true
       ThroughputMode: elastic
@@ -736,6 +738,8 @@ Resources:
   # Create Aurora PostgreSQL Serverless cluster
   CoderAuroraCluster:
     Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DBClusterIdentifier: !Sub '${EKSClusterName}-aurora'
       Engine: aurora-postgresql
@@ -756,6 +760,8 @@ Resources:
   # Create Aurora PostgreSQL instance
   CoderAuroraInstance:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DBInstanceIdentifier: !Sub '${EKSClusterName}-aurora-instance'
       DBInstanceClass: db.serverless
@@ -945,6 +951,14 @@ Resources:
                   cat > post_build.sh << 'POST_EOF'
                   #!/bin/bash
                   set -e
+
+                  # Signal CloudFormation FAILURE immediately on any error so the
+                  # WaitCondition fails fast instead of waiting out its 45-min timeout.
+                  signal_failure() {
+                    [ -n "$WAIT_HANDLE_URL" ] || return 0
+                    curl -sf -X PUT -H "Content-Type:" --data-binary "{\"Status\":\"FAILURE\",\"Reason\":\"CodeBuild post_build failed\",\"UniqueId\":\"EKSCluster\",\"Data\":\"post_build failed\"}" "$WAIT_HANDLE_URL" || true
+                  }
+                  trap 'rc=$?; if [ "$rc" -ne 0 ]; then signal_failure; fi' EXIT
                   
                   if [ "$BUILD_SUCCESS" = "true" ]; then
                     echo "EKS cluster creation successful"

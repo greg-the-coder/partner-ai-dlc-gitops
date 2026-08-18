@@ -209,6 +209,14 @@ project (`<cluster>-workspace-image-build`).
 The **core stack** is assessed the same way before Step 4: healthy → skip and validate
 the existing deployment; failed/unusable → delete and recreate; in progress → stop.
 
+**Rollback is disabled for the core stack** (`--on-failure DO_NOTHING`): a failed create
+is left in place so Aurora/EFS (both `DeletionPolicy: Retain`) and the EKS cluster survive
+for diagnosis or retry, instead of a rollback that would also fail on the shared VPC.
+Because of this, if the core stack is in a failed state **and its EKS cluster still
+exists**, the wizard will **not** auto-delete it (that delete would hit a VPC
+`DependencyViolation`); it prints an `eksctl delete cluster` + `delete-stack` runbook
+instead.
+
 ## Resuming a failed deployment (`--retry`)
 
 Every live `deploy` saves its **non-secret** parameters to
