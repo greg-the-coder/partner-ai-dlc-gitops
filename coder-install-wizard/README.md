@@ -206,6 +206,43 @@ skipped, not fatal):
 To force a rebuild of a healthy pipeline, delete the stack or re-run its CodeBuild
 project (`<cluster>-workspace-image-build`).
 
+The **core stack** is assessed the same way before Step 4: healthy → skip and validate
+the existing deployment; failed/unusable → delete and recreate; in progress → stop.
+
+**Rollback is disabled for the core stack** (`--on-failure DO_NOTHING`): a failed create
+is left in place so Aurora/EFS (both `DeletionPolicy: Retain`) and the EKS cluster survive
+for diagnosis or retry, instead of a rollback that would also fail on the shared VPC.
+Because of this, if the core stack is in a failed state **and its EKS cluster still
+exists**, the wizard will **not** auto-delete it (that delete would hit a VPC
+`DependencyViolation`); it prints an `eksctl delete cluster` + `delete-stack` runbook
+instead.
+
+## Resuming a failed deployment (`--retry`)
+
+Every live `deploy` saves its **non-secret** parameters to
+`~/.coder-wizard/last-deploy.json`. If a run fails partway (e.g. a CodeBuild error),
+resume it without re-entering anything:
+
+```bash
+partner-coder-wizard deploy --retry      # non-interactive
+partner-coder-wizard --retry             # or answer the wizard's "Resume?" prompt
+```
+
+On retry the wizard:
+
+1. reloads the last parameters (region, cluster, versions, admin identity, git repo,
+   developers/Spot split) — secrets are **not** stored (see below);
+2. assesses the **image-pipeline** and **core** stacks and picks up where it left off
+   (skip healthy, delete+recreate failed, wait on in-progress);
+3. deploys the core stack with **`RetryFlag=True`**, so the CloudFormation buildspec
+   reuses the existing EKS cluster and CloudFront distribution (via its idempotency
+   checks) and skips the one-time first-user creation and license application.
+
+Secrets are intentionally omitted from the state file: the admin password lives in
+Secrets Manager and the license is already applied, and `RetryFlag=True` skips the
+steps that would consume them. Provide `--license-key` again only if you specifically
+need to re-apply a license.
+
 ## Architecture of the Wizard
 
 ```

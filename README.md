@@ -285,10 +285,13 @@ terraform apply -auto-approve
 ## Architecture Summary
 
 - **EKS** — Auto Mode (control plane + system workloads) with two workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods) and an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods)
-- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS)
+- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). Uses
+  `DeletionPolicy: Retain` so a stack rollback/delete never destroys the database
+  (re-attach or clean up the retained cluster when reusing the same `EKSClusterName`).
 - **CloudFront + Network Load Balancer** — secure global access to Coder
 - **VPC** — public/private/Fargate subnets across 2 AZs, NAT gateways for egress
-- **EFS** — persistent workspace home directories (Fargate-compatible)
+- **EFS** — persistent workspace home directories (Fargate-compatible). Uses
+  `DeletionPolicy: Retain` so a stack rollback/delete never destroys home dirs.
 - **ECR** — three `coder-workspace-*` repositories holding the Fargate workspace images built by the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml)
 - **Secrets Manager** — admin password, session token, Bedrock Mantle API key
 - **IAM** — `<cluster>-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.), where `<cluster>` is `EKSClusterName` so multiple environments can coexist in one account

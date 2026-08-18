@@ -653,6 +653,8 @@ Resources:
 
   EfsFileSystem:
     Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Encrypted: true
       ThroughputMode: elastic
@@ -736,6 +738,8 @@ Resources:
   # Create Aurora PostgreSQL Serverless cluster
   CoderAuroraCluster:
     Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DBClusterIdentifier: !Sub '${EKSClusterName}-aurora'
       Engine: aurora-postgresql
@@ -756,6 +760,8 @@ Resources:
   # Create Aurora PostgreSQL instance
   CoderAuroraInstance:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       DBInstanceIdentifier: !Sub '${EKSClusterName}-aurora-instance'
       DBInstanceClass: db.serverless
@@ -920,7 +926,10 @@ Resources:
               commands:
                 - echo ">>> creating EKS cluster in region $AWSRegion with Auto Mode"
                 - |
-                  if [ "$RetryFlag" != "True" ]; then
+                  if aws eks describe-cluster --name "${EKSClusterName}" --region "${AWSRegion}" >/dev/null 2>&1; then
+                    echo "EKS cluster ${EKSClusterName} already exists; skipping creation (idempotent re-run)."
+                    export BUILD_SUCCESS=true
+                  elif [ "$RetryFlag" != "True" ]; then
                     if eksctl create cluster -f cluster-config.yaml; then
                       export BUILD_SUCCESS=true
                       echo "EKS cluster creation successful"
@@ -942,6 +951,14 @@ Resources:
                   cat > post_build.sh << 'POST_EOF'
                   #!/bin/bash
                   set -e
+
+                  # Signal CloudFormation FAILURE immediately on any error so the
+                  # WaitCondition fails fast instead of waiting out its 45-min timeout.
+                  signal_failure() {
+                    [ -n "$WAIT_HANDLE_URL" ] || return 0
+                    curl -sf -X PUT -H "Content-Type:" --data-binary "{\"Status\":\"FAILURE\",\"Reason\":\"CodeBuild post_build failed\",\"UniqueId\":\"EKSCluster\",\"Data\":\"post_build failed\"}" "$WAIT_HANDLE_URL" || true
+                  }
+                  trap 'rc=$?; if [ "$rc" -ne 0 ]; then signal_failure; fi' EXIT
                   
                   if [ "$BUILD_SUCCESS" = "true" ]; then
                     echo "EKS cluster creation successful"
@@ -997,7 +1014,7 @@ Resources:
                       echo "Fargate profile is ACTIVE"
 
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
-                      kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL"
+                      kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
                  
                       helm install coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
                     fi
@@ -1035,21 +1052,26 @@ Resources:
                     fi
 
                     if [ -n "$CODER_LB_HOSTNAME" ]; then
-                      echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
+                      CURRENT_CF_ORIGIN=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'DistributionConfig.Origins.Items[0].DomainName' --output text 2>/dev/null || echo "")
+                      if [ "$CURRENT_CF_ORIGIN" = "$CODER_LB_HOSTNAME" ]; then
+                        echo "CloudFront origin already points to $CODER_LB_HOSTNAME; skipping distribution update (idempotent re-run)."
+                      else
+                        echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
 
-                      CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
-                      ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
-                      DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
+                        CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
+                        ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
+                        DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
 
-                      UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
-                        '.Origins.Items[0].DomainName = $hostname')
+                        UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
+                          '.Origins.Items[0].DomainName = $hostname')
 
-                      echo "$UPDATED_CONFIG" > updated-cf-config.json
+                        echo "$UPDATED_CONFIG" > updated-cf-config.json
 
-                      aws cloudfront update-distribution \
-                        --id "$CLOUDFRONT_DISTRIBUTION_ID" \
-                        --distribution-config file://updated-cf-config.json \
-                        --if-match "$ETAG"
+                        aws cloudfront update-distribution \
+                          --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+                          --distribution-config file://updated-cf-config.json \
+                          --if-match "$ETAG"
+                      fi
 
                       DISTRIBUTION_ID="$CLOUDFRONT_DISTRIBUTION_ID"
 
@@ -1077,7 +1099,21 @@ Resources:
                       sed -i "s|https://coder.example.com|$CODER_CLOUDFRONT_URL|g" coder-core-values-v2.yaml
                       sed -i "s|\*.coder.example.com|$CODER_CLOUDFRONT_WILDCARD|g" coder-core-values-v2.yaml
                       helm upgrade coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
-                      
+
+                      # Ensure coder-db-url matches the current Aurora endpoint. On a RetryFlag=True
+                      # re-run the Aurora cluster may have been recreated with a new endpoint; refresh
+                      # the secret (idempotent) and restart coder so it reconnects. No-op on a fresh
+                      # deploy where the value is already current.
+                      PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
+                      if kubectl -n coder get secret coder-db-url >/dev/null 2>&1; then
+                        EXISTING_DB_URL=$(kubectl -n coder get secret coder-db-url -o jsonpath='{.data.url}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+                        if [ "$EXISTING_DB_URL" != "$PostgreSQLConnectionURL" ]; then
+                          echo "coder-db-url differs from the current Aurora endpoint; refreshing and restarting coder."
+                          kubectl -n coder create secret generic coder-db-url --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
+                          kubectl -n coder rollout restart deploy/coder || true
+                        fi
+                      fi
+
                       kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=coder -n coder --timeout=300s
 
                       echo "Cycling CloudFront connection pool..."

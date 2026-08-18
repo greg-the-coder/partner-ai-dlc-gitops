@@ -26,6 +26,7 @@ import secrets
 import string
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from coder_wizard import preflight, deploy, validate, cost_estimate, summary, dryrun
@@ -199,6 +200,128 @@ def _parse_spot_fraction(raw: str) -> float:
 # Sub-commands
 # ---------------------------------------------------------------------------
 
+def _state_path() -> Path:
+    return Path(os.path.expanduser("~/.coder-wizard/last-deploy.json"))
+
+
+def _save_deploy_state(args: argparse.Namespace) -> None:
+    """Persist the last deployment's non-secret parameters for --retry / resume.
+
+    Secrets (admin password, license key) are intentionally NOT stored; on retry
+    the CFN RetryFlag=True path skips first-user creation and license add.
+    """
+    data = {
+        "saved_at":      datetime.now(tz=timezone.utc).isoformat(),
+        "region":        args.region,
+        "cluster":       args.cluster,
+        "developers":    getattr(args, "developers", 10),
+        "spot_fraction": str(getattr(args, "spot_fraction", "0")),
+        "git_repo_url":  args.git_repo_url,
+        "git_branch":    args.git_branch,
+        "admin_email":   args.admin_email,
+        "admin_user":    args.admin_user,
+        "admin_name":    args.admin_name,
+        "k8s_version":   args.k8s_version,
+        "coder_version": args.coder_version,
+        "pipeline_template": args.pipeline_template,
+        "core_template":     args.core_template,
+        "license_provided":  bool(getattr(args, "license_key", "")),
+    }
+    try:
+        p = _state_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2))
+    except OSError:
+        pass  # best-effort; state persistence is a convenience, not required
+
+
+def _load_deploy_state() -> dict | None:
+    p = _state_path()
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _apply_state_to_args(args: argparse.Namespace, state: dict) -> None:
+    """Overlay saved (non-secret) parameters onto args for a retry/resume."""
+    for key in (
+        "region", "cluster", "developers", "spot_fraction", "git_repo_url",
+        "git_branch", "admin_email", "admin_user", "admin_name",
+        "k8s_version", "coder_version", "pipeline_template", "core_template",
+    ):
+        if key in state and state[key] is not None:
+            setattr(args, key, state[key])
+    # spot_fraction is stored as a string; keep it stringy for _parse_spot_fraction
+    if "spot_fraction" in state:
+        args.spot_fraction = str(state["spot_fraction"])
+
+
+def _retry_args() -> argparse.Namespace:
+    """Minimal args for a retry/resume; cmd_deploy overlays the rest from saved state."""
+    ra = argparse.Namespace()
+    ra.retry_flag = True
+    ra.license_key = ""
+    ra.admin_password = ""
+    ra.yes = True
+    ra.dry_run = False
+    ra.dry_run_output = None
+    return ra
+
+
+def _eks_cluster_exists(cluster: str, region: str) -> bool:
+    r = subprocess.run(
+        ["aws", "eks", "describe-cluster", "--name", cluster, "--region", region],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0
+
+
+def _prepare_stack_for_create(stack_name: str, region: str, label: str,
+                              on_event, eks_cluster: str | None = None) -> str:
+    """Assess an existing CloudFormation stack before (re)creating it.
+
+    Returns one of: 'create' (proceed to create-stack), 'skip' (already healthy),
+    or 'abort' (in progress, unexpected, or delete failed).
+    """
+    status = deploy.get_stack_status(stack_name, region)
+    if status is None:
+        return "create"
+    if status in deploy.SUCCESS_STATUSES:
+        print(ok(f"{label} stack already exists and is healthy ({status})."))
+        return "skip"
+    if deploy.is_in_progress(status):
+        print(fail(f"{label} stack is currently {status}."))
+        print(info("Wait for the in-progress operation to finish, then re-run."))
+        return "abort"
+    if status in deploy.RECREATE_STATUSES:
+        if eks_cluster and _eks_cluster_exists(eks_cluster, region):
+            print(fail(f"{label} stack is {status}, but EKS cluster '{eks_cluster}' still exists."))
+            print(info("Refusing to auto-delete: this stack owns the VPC the cluster runs in, so a "
+                       "delete hits a DependencyViolation and can orphan resources. Recover manually:"))
+            print(info(f"  1) eksctl delete cluster --name {eks_cluster} --region {region} --wait"))
+            print(info(f"  2) aws cloudformation delete-stack --stack-name {stack_name} --region {region}"))
+            print(info(f"     aws cloudformation wait stack-delete-complete --stack-name {stack_name} --region {region}"))
+            print(info("  3) re-run the wizard for a fresh deploy."))
+            print(info("  (Aurora/EFS use DeletionPolicy: Retain, so data survives step 2 — clean up or "
+                       "reattach the retained resources as needed.)"))
+            return "abort"
+        print(warn(f"{label} stack exists in a failed state ({status}). Deleting and recreating..."))
+        res = deploy.delete_stack(stack_name, region, on_event=on_event)
+        if not res.success:
+            print()
+            print(fail(f"Could not delete the failed {label} stack: {res.error}"))
+            print(info("Delete it manually in the CloudFormation console, then re-run."))
+            return "abort"
+        print(ok(f"Failed {label} stack deleted; recreating."))
+        return "create"
+    print(fail(f"{label} stack is in an unexpected state '{status}'."))
+    print(info("Resolve it in the CloudFormation console, then re-run."))
+    return "abort"
+
+
 def cmd_preflight(args: argparse.Namespace) -> int:
     _section("Pre-flight Checks")
     print(info(f"Region: {args.region}  |  EKS cluster name: {args.cluster}"))
@@ -287,7 +410,7 @@ def _build_params(args: argparse.Namespace, admin_password: str) -> tuple[dict, 
         "CoderAdminName":             args.admin_name,
         "CoderAdminPassword":         admin_password,
         "CoderGitOpsTemplateRepoURL": args.git_repo_url,
-        "RetryFlag":                  "False",
+        "RetryFlag":                  "True" if getattr(args, "retry_flag", False) else "False",
     }
     if getattr(args, "license_key", ""):
         core_params["CoderLicenseKey"] = args.license_key
@@ -296,6 +419,20 @@ def _build_params(args: argparse.Namespace, admin_password: str) -> tuple[dict, 
 
 def cmd_deploy(args: argparse.Namespace) -> int:
     """Full orchestrated deploy: preflight → cost → pipeline stack → core stack → validate."""
+
+    retrying = getattr(args, "retry_flag", False)
+    if retrying:
+        state = _load_deploy_state()
+        if not state:
+            print(fail(f"No saved deployment state found at {_state_path()}."))
+            print(info("Run a normal deploy first, or drop --retry and pass parameters explicitly."))
+            return 1
+        _apply_state_to_args(args, state)
+        print(info(f"Resuming last deployment (saved {state.get('saved_at', '?')}) with RetryFlag=True."))
+
+    if not retrying and not getattr(args, "admin_email", ""):
+        print(fail("--admin-email is required (or use --retry to resume the last deployment)."))
+        return 1
 
     spot_fraction = _parse_spot_fraction(getattr(args, "spot_fraction", "0"))
 
@@ -311,6 +448,8 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     print(info(f"Region  : {args.region}"))
     print(info(f"Cluster : {args.cluster}"))
     print(info(f"Coder   : {args.coder_version}  |  Spot lane share: {spot_fraction*100:.0f}%"))
+    if retrying:
+        print(info("Mode    : RETRY — reusing saved parameters; assessing stacks to resume."))
 
     # ── 1. Pre-flight ──────────────────────────────────────────────────────
     _section("Step 1 — Pre-flight Checks")
@@ -394,6 +533,10 @@ def cmd_deploy(args: argparse.Namespace) -> int:
 
     pipeline_params, core_params = _build_params(args, admin_password)
 
+    # Persist non-secret params so a later `deploy --retry` (or wizard resume) can
+    # reuse them and pick up where this attempt left off.
+    _save_deploy_state(args)
+
     def _on_pipeline_event(evt: deploy.StackEvent) -> None:
         icon = "🔄" if "IN_PROGRESS" in evt.status else ("✅" if "COMPLETE" in evt.status else "❌")
         print(f"  {icon}  {evt.timestamp[11:19]}  {evt.logical_id:<35} {evt.status}")
@@ -462,10 +605,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
 
     # ── 4. Core Coder stack ────────────────────────────────────────────────
     core_stack = f"{args.cluster}-coder"
-    _section(f"Step 4 — Deploy Core Coder Stack ({core_stack})")
-    print(info("This provisions EKS (Auto Mode) + Fargate profile + EC2 Spot NodePool, "
-               "Aurora, EFS, CloudFront, installs Coder, and applies the license (~35–45 min)."))
-    print()
+    _section(f"Step 4 — Core Coder Stack ({core_stack})")
 
     def _on_core_event(evt: deploy.StackEvent) -> None:
         icon = "🔄" if "IN_PROGRESS" in evt.status else ("✅" if "COMPLETE" in evt.status else "❌")
@@ -473,22 +613,40 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         if evt.reason and "reason" not in evt.reason.lower():
             print(dim(f"            {evt.reason}"))
 
-    core_result = deploy.deploy_stack(
-        stack_name=core_stack,
-        template_path=args.core_template,
-        parameters=core_params,
-        region=args.region,
-        on_event=_on_core_event,
-    )
-
-    if not core_result.success:
-        print()
-        print(fail(f"Core stack failed: {core_result.error}"))
-        print(info(f"Check CodeBuild logs: aws logs tail /aws/codebuild/CodeBuild-{core_stack} --follow"))
+    # Assess the existing core stack: skip if healthy, delete+recreate if failed,
+    # abort if mid-operation. On --retry this recreates with RetryFlag=True, and the
+    # buildspec's idempotency checks reuse the existing EKS cluster / CloudFront.
+    core_action = _prepare_stack_for_create(core_stack, args.region, "Core Coder", _on_core_event, eks_cluster=args.cluster)
+    if core_action == "abort":
         return 1
 
-    print()
-    print(ok("Core Coder stack deployed successfully."))
+    if core_action == "skip":
+        print(info("Core stack already deployed; validating the existing deployment."))
+        core_result = deploy.DeployResult(
+            stack_name=core_stack, success=True,
+            outputs=deploy.get_stack_outputs(core_stack, args.region),
+        )
+    else:
+        print(info("This provisions EKS (Auto Mode) + Fargate profile + EC2 Spot NodePool, "
+                   "Aurora, EFS, CloudFront, installs Coder, and applies the license (~35–45 min)."))
+        print(info("Rollback is disabled (--on-failure DO_NOTHING): on failure the stack is left in "
+                   "place so Aurora/EFS and the EKS cluster survive for diagnosis or retry."))
+        print()
+        core_result = deploy.deploy_stack(
+            stack_name=core_stack,
+            template_path=args.core_template,
+            parameters=core_params,
+            region=args.region,
+            on_event=_on_core_event,
+            on_failure="DO_NOTHING",
+        )
+        if not core_result.success:
+            print()
+            print(fail(f"Core stack failed: {core_result.error}"))
+            print(info(f"Check CodeBuild logs: aws logs tail /aws/codebuild/CodeBuild-{core_stack} --follow"))
+            return 1
+        print()
+        print(ok("Core Coder stack deployed successfully."))
 
     # ── 5. Post-install validation ─────────────────────────────────────────
     _section("Step 5 — Post-Install Validation")
@@ -537,6 +695,9 @@ def cmd_deploy(args: argparse.Namespace) -> int:
 def cmd_wizard(_args: argparse.Namespace) -> int:
     """Conversational setup: asks questions, runs preflight, cost estimate, then deploys."""
 
+    if getattr(_args, "retry_flag", False):
+        return cmd_deploy(_retry_args())
+
     print()
     print(bold("╔══════════════════════════════════════════════════════════════╗"))
     print(bold("║     Partner Demo — Coder Install Wizard  v0.2                ║"))
@@ -552,6 +713,15 @@ def cmd_wizard(_args: argparse.Namespace) -> int:
     print()
 
     # ── Gather config ──────────────────────────────────────────────────────
+    _saved = _load_deploy_state()
+    if _saved and _confirm(
+        f"Resume the last deployment (cluster '{_saved.get('cluster')}', "
+        f"region '{_saved.get('region')}', saved {_saved.get('saved_at', '?')})?",
+        default=False,
+    ):
+        print(info("Resuming with saved parameters and RetryFlag=True."))
+        return cmd_deploy(_retry_args())
+
     _section("Configuration")
 
     region = _prompt("AWS region", default=_get_current_region())
@@ -660,6 +830,7 @@ def cmd_wizard(_args: argparse.Namespace) -> int:
     deploy_args.yes = True   # cost already confirmed above
     deploy_args.dry_run = dry_run
     deploy_args.dry_run_output = f"coder-deploy-{cluster}"
+    deploy_args.retry_flag = False
 
     return cmd_deploy(deploy_args)
 
@@ -681,6 +852,8 @@ def build_parser() -> argparse.ArgumentParser:
     wizard_p = sub.add_parser("wizard", help="Interactive guided install (default)")
     wizard_p.add_argument("--dry-run", action="store_true",
                           help="Skip the 'deploy now?' prompt and go straight to dry-run output")
+    wizard_p.add_argument("--retry", dest="retry_flag", action="store_true",
+                          help="Resume the last deployment using saved parameters (RetryFlag=True)")
     wizard_p.set_defaults(func=cmd_wizard)
 
     # ── preflight ──────────────────────────────────────────────────────────
@@ -710,7 +883,8 @@ def build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--core-template",     default="./infrastructure/coder_deployment.yaml")
     dep.add_argument("--git-repo-url",    default=DEFAULT_GIT_REPO)
     dep.add_argument("--git-branch",      default="main")
-    dep.add_argument("--admin-email",     required=True)
+    dep.add_argument("--admin-email",     default="",
+                     help="Coder admin email (required unless --retry resumes saved state)")
     dep.add_argument("--admin-user",      default="admin")
     dep.add_argument("--admin-name",      default="Coder Admin")
     dep.add_argument("--admin-password",  default="", help="Leave blank to auto-generate")
@@ -722,6 +896,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Generate parameter files and deploy script without creating any AWS resources")
     dep.add_argument("--dry-run-output",  default=None, metavar="DIR",
                      help="Directory to write dry-run files (default: coder-deploy-<cluster>)")
+    dep.add_argument("--retry", dest="retry_flag", action="store_true",
+                     help="Resume the last deployment using saved parameters: reloads the last "
+                          "params, assesses the image-pipeline and core stacks, and recreates/resumes "
+                          "the core stack with CFN RetryFlag=True.")
     dep.set_defaults(func=cmd_deploy)
 
     # ── validate ───────────────────────────────────────────────────────────

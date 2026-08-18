@@ -259,6 +259,11 @@ def get_stack_status(stack_name: str, region: str) -> Optional[str]:
     return _cfn_stack_status(stack_name, region)
 
 
+def get_stack_outputs(stack_name: str, region: str) -> dict:
+    """Return the CloudFormation stack outputs as a dict (empty if none/not found)."""
+    return _cfn_stack_outputs(stack_name, region)
+
+
 def is_in_progress(status: Optional[str]) -> bool:
     return bool(status) and status.endswith("_IN_PROGRESS") and status != "REVIEW_IN_PROGRESS"
 
@@ -305,6 +310,7 @@ def deploy_stack(
     region: str,
     on_event: Callable[[StackEvent], None] | None = None,
     poll_interval: int = 15,
+    on_failure: Optional[str] = None,
 ) -> DeployResult:
     """
     Deploy a CloudFormation stack and stream events until it reaches a terminal state.
@@ -326,6 +332,12 @@ def deploy_stack(
         "--region", region,
         "--parameters",
     ] + param_list
+
+    # ROLLBACK (default) | DO_NOTHING | DELETE. DO_NOTHING keeps resources on
+    # failure so stateful data (Aurora/EFS) and the EKS cluster aren't destroyed
+    # by a rollback that would also fail on the shared VPC.
+    if on_failure:
+        create_args += ["--on-failure", on_failure]
 
     code, _, err = _aws(create_args)
     if code != 0:
