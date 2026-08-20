@@ -135,21 +135,25 @@ static PV/PVC (`efs-static`, `ReadWriteMany`) mounted at `/home/coder`.
 
 ## Coder Agents
 
-Coder Agents are configured during deployment through the Coder API (no console clicks
-required). Two AI providers are provisioned:
+Coder Agents are configured during deployment via the `coderd` Terraform provider (no
+console clicks required). Two AI providers are provisioned:
 
-| Provider | Type | Endpoint | Models |
+| Provider (name) | Type | Endpoint | Models |
 |----------|------|----------|--------|
-| `aws-bedrock-partner` | Bedrock (native, SigV4) | `bedrock-runtime.us-east-1` | Claude Opus 4.8 (default), Claude Haiku 4.5 (small/fast) |
-| `openai-compat` | OpenAI-compatible (Bedrock Mantle) | `bedrock-mantle.us-east-1` | Mistral Large 3, Devstral 2 |
+| `bedrock` ("AWS Bedrock") | Bedrock (native, Pod Identity IAM) | `bedrock-runtime.us-east-1` | Claude Opus 4.6 (default), Claude Haiku 4.5 (small/fast) |
+| `openai-compat` ("OpenAI via AWS Bedrock") | OpenAI-compatible (Bedrock Mantle) | `bedrock-mantle.us-east-1` | OpenAI gpt-oss-120b, Devstral 2 123B |
 
 Notes:
 - Anthropic models use global cross-region inference profile IDs and are served from
   **us-east-1**, independent of the stack's deployment region.
+- Native Bedrock credentials come from the workspace/`coderd` pod IAM role (EKS Pod
+  Identity), so no static access keys are stored for the `bedrock` provider.
 - The Bedrock Mantle (OpenAI-compatible) API key is generated automatically from an IAM
   service-specific credential and stored in Secrets Manager.
-- Provider and model configuration is applied idempotently by the CodeBuild deployment
-  script via `/api/v2/ai/providers` and `/api/experimental/chats/model-configs`.
+- Provider and model configuration is applied declaratively by the
+  [`ai-providers/`](./ai-providers) Terraform (the `coderd` provider) during the CodeBuild
+  deploy step, replacing the earlier direct `/api/v2/ai/providers` and
+  `/api/experimental/chats/model-configs` API calls.
 
 ## Workspace Templates
 
@@ -165,6 +169,12 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 
 All templates support both compute lanes (Fargate default, EC2 Spot optional) via the
 **Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
+
+The **Claude Code** and **Kiro CLI** templates ship the
+[AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS documentation, CDK, AWS
+diagram, and Terraform) preconfigured for their assistants, running on demand via `uvx`.
+The **Kiro CLI** template additionally offers an optional **KiroCrew** multi-agent
+orchestration gateway + dashboard, toggled with its **Enable KiroCrew** parameter.
 
 ## Prerequisites
 

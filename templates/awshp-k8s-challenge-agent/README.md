@@ -38,6 +38,35 @@ agentic-AI libraries and AWS tooling baked into the image.
 - **Lyzr** (`lyzr-automata`)
 - **Amazon Bedrock** via `boto3` / `botocore` / `langchain-aws`
 
+### LLM routing via Coder AI Gateway
+The workspace points the Python agent SDKs at the Coder AI Gateway so notebook LLM
+calls are governed centrally. The agent kernel (`Python (Agents)`) inherits:
+
+- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/aibridge/anthropic`
+- `OPENAI_BASE_URL` → `<access_url>/api/v2/aibridge/openai/v1`
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` → the user's Coder session token
+
+So Anthropic- and OpenAI-protocol clients route through the gateway with no extra
+config:
+
+```python
+# Anthropic protocol -> gateway -> Bedrock provider
+from langchain_anthropic import ChatAnthropic
+llm = ChatAnthropic(model="global.anthropic.claude-opus-4-6-v1")
+
+# OpenAI protocol -> gateway -> Bedrock Mantle (OpenAI-compatible) provider
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(model="openai.gpt-oss-120b")   # or "mistral.devstral-2-123b"
+```
+
+> **Bedrock SigV4 is not gateway-routable.** The AI Gateway only exposes OpenAI- and
+> Anthropic-compatible endpoints, so `boto3` `bedrock-runtime`, `langchain-aws`
+> `ChatBedrock`, and `llama-index-llms-bedrock` still call Amazon Bedrock **directly**
+> via the workspace IAM role. Use the Anthropic/OpenAI clients above to route a
+> notebook through the gateway.
+>
+> Requires Coder v2.32+ with the **AI Governance Add-On** enabled on the deployment.
+
 ### Observability
 - OpenTelemetry (`api`, `sdk`, OTLP exporter)
 - Arize Phoenix (`arize-phoenix`)
@@ -65,6 +94,7 @@ agentic-AI libraries and AWS tooling baked into the image.
 |-----------|---------|-------|
 | CPU cores | 4 | 2–8 |
 | Memory (GB) | 8 | 4–16 |
+| Compute Lane | fargate | fargate / spot |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
 
@@ -72,4 +102,8 @@ Storage is provisioned automatically via EFS; there is no disk-size parameter.
 
 - Tools installed outside `/home/coder` are part of the container image; rebuild the image to
   add system packages. Files under `/home/coder` persist across restarts.
+- The OpenAI client libraries (`openai`, `langchain-openai`, `llama-index-llms-openai`) used
+  for the gateway's OpenAI-compatible path are baked into the shared base image
+  (`images/coder-workspace-base/Dockerfile`); rebuild the workspace images (Step 1 pipeline)
+  to pick them up on the pre-baked `Python (Agents)` kernel.
 - This template is intended as the single environment Coder Agents use for the workshop.

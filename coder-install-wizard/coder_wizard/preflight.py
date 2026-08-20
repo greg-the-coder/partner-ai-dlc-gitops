@@ -118,10 +118,10 @@ def check_bedrock_model_access(region: str = "us-east-1") -> CheckResult:
     """Check that the required Bedrock foundation models are accessible."""
     required_models = [
         # (model_id_prefix_to_check, friendly_name)
-        ("anthropic.claude-3-haiku",    "Claude Haiku (Bedrock)"),
-        ("anthropic.claude-opus-4",     "Claude Opus 4 (Bedrock)"),
-        ("mistral.mistral-large",       "Mistral Large (Bedrock Mantle)"),
-        ("mistral.devstral",            "Devstral (Bedrock Mantle)"),
+        ("anthropic.claude-haiku-4",    "Claude Haiku 4.5 (Bedrock)"),
+        ("anthropic.claude-opus-4",     "Claude Opus 4.6 (Bedrock)"),
+        ("openai.gpt-oss",              "OpenAI gpt-oss-120b (Bedrock Mantle)"),
+        ("mistral.devstral",            "Devstral 2 (Bedrock Mantle)"),
     ]
 
     code, data = _aws_json([
@@ -138,8 +138,8 @@ def check_bedrock_model_access(region: str = "us-east-1") -> CheckResult:
             detail="This may mean Bedrock is not enabled in your account or the IAM caller lacks bedrock:ListFoundationModels.",
             fix=(
                 "Go to AWS Console → Amazon Bedrock → Model access and enable:\n"
-                "  • Claude Opus 4 / Claude Haiku 4.5 (Anthropic)\n"
-                "  • Mistral Large 3 / Devstral 2 (Mistral AI)\n"
+                "  • Claude Opus 4.6 / Claude Haiku 4.5 (Anthropic)\n"
+                "  • OpenAI gpt-oss-120b / Devstral 2 (served via Bedrock Mantle)\n"
                 "Ensure your IAM user/role has bedrock:InvokeModel permission."
             ),
         )

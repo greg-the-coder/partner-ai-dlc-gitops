@@ -18,12 +18,45 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 ### AI assistant
 - **Claude Code** CLI (`@anthropic-ai/claude-code`) with **task automation** and task
   reporting back to Coder (`report_tasks = true`)
-- **Amazon Bedrock** integration — defaults to Claude Opus 4.8
-  (`global.anthropic.claude-opus-4-8`) via the workspace IAM role
+- **Coder AI Gateway** routing — Claude Code's model requests go through the Coder AI
+  Gateway (`ANTHROPIC_BASE_URL = <access_url>/api/v2/aibridge/anthropic`), authenticated
+  with the user's Coder session token (`enable_aibridge = true`). The gateway forwards to
+  the admin-configured Amazon Bedrock provider (default **Claude Opus 4.6**,
+  `global.anthropic.claude-opus-4-6-v1`) using the control plane's centrally-held
+  credentials — no AWS keys or `CLAUDE_CODE_USE_BEDROCK` in the workspace — so all usage is
+  centrally governed and observable.
+  > Requires Coder v2.32+ with the **AI Governance Add-On** enabled on the deployment.
 - **MCP** (Model Context Protocol) — the
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS
   documentation, CDK, AWS diagram, and Terraform) are added to Claude Code at
   user scope and run on demand via `uvx`.
+
+### Notebooks & agent SDKs (Coder AI Gateway)
+The workspace also points the Python agent SDKs at the Coder AI Gateway so notebook
+LLM calls are governed centrally. The agent kernel (`Python (Agents)`) inherits:
+
+- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/aibridge/anthropic` (set by Claude Code)
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` → the user's Coder session token
+- `OPENAI_BASE_URL` → `<access_url>/api/v2/aibridge/openai/v1`
+
+So Anthropic- and OpenAI-protocol clients route through the gateway with no extra
+config:
+
+```python
+# Anthropic protocol -> gateway -> Bedrock provider
+from langchain_anthropic import ChatAnthropic
+llm = ChatAnthropic(model="global.anthropic.claude-opus-4-6-v1")
+
+# OpenAI protocol -> gateway -> Bedrock Mantle (OpenAI-compatible) provider
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(model="openai.gpt-oss-120b")   # or "mistral.devstral-2-123b"
+```
+
+> **Bedrock SigV4 is not gateway-routable.** The AI Gateway only exposes OpenAI- and
+> Anthropic-compatible endpoints, so `boto3` `bedrock-runtime`, `langchain-aws`
+> `ChatBedrock`, and `llama-index-llms-bedrock` still call Amazon Bedrock **directly**
+> via the workspace IAM role. Use the Anthropic/OpenAI clients above to route a
+> notebook through the gateway.
 
 ### Developer environment
 - **code-server** (VS Code in the browser) and **Kiro IDE** web app
@@ -43,11 +76,16 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 |-----------|---------|-------|
 | CPU cores | 4 | 2–8 |
 | Memory (GB) | 8 | 4–16 |
+| Compute Lane | fargate | fargate / spot |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
 
 ## Notes
 - Tools installed outside `/home/coder` are part of the container image; rebuild the image to
   add system packages. Files under `/home/coder` persist across restarts.
+- The OpenAI client libraries (`openai`, `langchain-openai`, `llama-index-llms-openai`) used
+  for the gateway's OpenAI-compatible path are baked into the shared base image
+  (`images/coder-workspace-base/Dockerfile`); rebuild the workspace images (Step 1 pipeline)
+  to pick them up on the pre-baked `Python (Agents)` kernel.
 - For Coder Agents, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent) template
   is the environment optimized for agentic use.

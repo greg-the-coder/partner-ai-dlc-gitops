@@ -147,7 +147,7 @@ The wizard captures the CloudFormation inputs teams change most often:
 |---|---|
 | AWS Credentials | `sts get-caller-identity` — valid credentials exist |
 | AWS Region | Warns if deploying outside us-east-1 (Bedrock inference hardcoded there) |
-| Bedrock Model Access | Claude Opus 4, Claude Haiku 4.5, Mistral Large 3, Devstral 2 accessible |
+| Bedrock Model Access | Claude Opus 4.6, Claude Haiku 4.5, OpenAI gpt-oss-120b, Devstral 2 accessible |
 | Quota: EKS Clusters / VPCs / NAT Gateways / EIPs | Headroom for a fresh cluster |
 | Quota: Aurora ACUs | ≥ 40 Serverless v2 ACUs |
 | Quota: EC2 Spot Standard vCPUs | ≥ 32 (for the Spot workspace lane) |
