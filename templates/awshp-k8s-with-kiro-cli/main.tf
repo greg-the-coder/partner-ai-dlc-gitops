@@ -41,10 +41,9 @@ locals {
   home_dir = "/home/coder"
 
   # AWS MCP servers wired into Kiro CLI (mcp.json). All run over stdio via `uvx`
-  # (pinned @latest) with quiet logging. These replace the former third-party
-  # (Fiddler / LangSmith / LlamaCloud) servers so the workshop agents get
-  # first-class AWS documentation, CDK, Terraform, and diagram tooling out of the
-  # box. See https://github.com/awslabs/mcp for each server's capabilities.
+  # (pinned @latest) with quiet logging, giving the workshop agents first-class
+  # AWS documentation, CDK, Terraform, and diagram tooling out of the box.
+  # See https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
     "awslabs.core-mcp-server" = {
       command = "uvx"
