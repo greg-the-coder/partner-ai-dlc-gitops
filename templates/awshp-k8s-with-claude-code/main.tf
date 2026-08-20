@@ -147,6 +147,37 @@ resource "coder_env" "path" {
   value    = local.bin_path
 }
 
+# Route the notebook / agent-framework SDK LLM calls through the Coder AI Gateway
+# too, wherever the SDK speaks a protocol the gateway exposes (OpenAI or
+# Anthropic). The claude-code module already exports ANTHROPIC_BASE_URL agent-wide
+# (enable_aibridge); these add the matching API key and the OpenAI-compatible base
+# URL/key so code using the Anthropic or OpenAI SDKs (langchain-anthropic /
+# langchain-openai / llama-index OpenAI / the anthropic & openai SDKs / Strands'
+# OpenAI provider) authenticates to the gateway with the user's Coder session
+# token and is centrally governed — no direct provider calls.
+#
+# LIMITATION: the gateway does NOT expose a Bedrock SigV4 surface, so boto3
+# bedrock-runtime, langchain-aws ChatBedrock and llama-index-llms-bedrock still
+# call Bedrock directly via the workspace IAM role. Use the Anthropic/OpenAI
+# clients above to route a notebook through the gateway (see README).
+resource "coder_env" "anthropic_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "ANTHROPIC_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
+}
+
+resource "coder_env" "openai_base_url" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_BASE_URL"
+  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/openai/v1"
+}
+
+resource "coder_env" "openai_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
+}
+
 resource "coder_agent" "dev" {
   arch = "amd64"
   os   = "linux"
@@ -234,10 +265,11 @@ resource "coder_script" "agent_python_kernel" {
       ipykernel \
       "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
       bedrock-agentcore bedrock-agentcore-starter-toolkit \
-      langchain langchain-core langchain-aws langchain-anthropic langchain-community langgraph \
+      langchain langchain-core langchain-aws langchain-anthropic langchain-openai langchain-community langgraph \
       "llama-index>=0.12.0" llama-index-core llama-index-llms-bedrock \
-      llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
+      llama-index-llms-bedrock-converse llama-index-embeddings-bedrock llama-index-llms-openai \
       llama-index-readers-file llama-cloud \
+      openai \
       strands-agents strands-agents-tools
     "$VENV/bin/python" -m ipykernel install --user \
       --name agents --display-name "Python (Agents)"

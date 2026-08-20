@@ -67,10 +67,11 @@ RUN uv venv --python 3.12 --seed /opt/venvs/agents \
         ipykernel \
         "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
         bedrock-agentcore bedrock-agentcore-starter-toolkit \
-        langchain langchain-core langchain-aws langchain-anthropic langchain-community langgraph \
+        langchain langchain-core langchain-aws langchain-anthropic langchain-openai langchain-community langgraph \
         "llama-index>=0.12.0" llama-index-core llama-index-llms-bedrock \
-        llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
+        llama-index-llms-bedrock-converse llama-index-embeddings-bedrock llama-index-llms-openai \
         llama-index-readers-file llama-cloud \
+        openai \
         strands-agents strands-agents-tools \
         hiddenlayer-sdk protopia \
     && /opt/venvs/agents/bin/python -m ipykernel install --prefix=/usr/local \
