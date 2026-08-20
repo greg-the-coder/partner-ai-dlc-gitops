@@ -1,22 +1,22 @@
 terraform {
-    required_providers {
-        kubernetes = {
-            source = "hashicorp/kubernetes"
-            version = "2.37.1"
-        }
-        coder = {
-            source  = "coder/coder"
-            version = ">= 2.13"
-        }
-        random = {
-            source = "hashicorp/random"
-            version = "3.7.2"
-        }
-        aws = {
-            source = "hashicorp/aws"
-            version = ">= 5.0"
-        }
+  required_providers {
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "2.37.1"
     }
+    coder = {
+      source  = "coder/coder"
+      version = ">= 2.13"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "3.7.2"
+    }
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
 }
 
 variable "namespace" {
@@ -108,43 +108,80 @@ resource "coder_env" "path" {
   value    = local.bin_path
 }
 
+# Route the notebook / agent-framework SDK LLM calls through the Coder AI Gateway,
+# wherever the SDK speaks a protocol the gateway exposes (OpenAI or Anthropic).
+# Unlike the Claude Code template, this template has no claude-code module to set
+# ANTHROPIC_BASE_URL, so all four vars are set explicitly. Code using the Anthropic
+# or OpenAI SDKs (langchain-anthropic / langchain-openai / llama-index OpenAI / the
+# anthropic & openai SDKs / Strands' OpenAI provider) then authenticates to the
+# gateway with the user's Coder session token and is centrally governed.
+#
+# LIMITATION: the gateway does NOT expose a Bedrock SigV4 surface, so boto3
+# bedrock-runtime, langchain-aws ChatBedrock and llama-index-llms-bedrock still
+# call Bedrock directly via the workspace IAM role. Use the Anthropic/OpenAI
+# clients to route a notebook through the gateway (see README).
+# NOTE: AI Gateway requires Coder v2.32+ with the AI Governance Add-On enabled.
+resource "coder_env" "anthropic_base_url" {
+  agent_id = coder_agent.dev.id
+  name     = "ANTHROPIC_BASE_URL"
+  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/anthropic"
+}
+
+resource "coder_env" "anthropic_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "ANTHROPIC_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
+}
+
+resource "coder_env" "openai_base_url" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_BASE_URL"
+  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/openai/v1"
+}
+
+resource "coder_env" "openai_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
+}
+
 resource "coder_agent" "dev" {
-    arch = "amd64"
-    os = "linux"
+  arch = "amd64"
+  os   = "linux"
 
-    display_apps {
-        vscode          = false
-        vscode_insiders = false
-        web_terminal    = true
-        ssh_helper      = false
-    }
+  display_apps {
+    vscode          = false
+    vscode_insiders = false
+    web_terminal    = true
+    ssh_helper      = false
+  }
 
-    # Live workspace resource utilization shown in the Coder dashboard,
-    # using the agent's built-in `coder stat` command (pod/container-scoped).
-    metadata {
-        display_name = "CPU Usage"
-        key          = "0_cpu_usage"
-        script       = "coder stat cpu"
-        interval     = 10
-        timeout      = 1
-    }
+  # Live workspace resource utilization shown in the Coder dashboard,
+  # using the agent's built-in `coder stat` command (pod/container-scoped).
+  metadata {
+    display_name = "CPU Usage"
+    key          = "0_cpu_usage"
+    script       = "coder stat cpu"
+    interval     = 10
+    timeout      = 1
+  }
 
-    metadata {
-        display_name = "RAM Usage"
-        key          = "1_ram_usage"
-        script       = "coder stat mem"
-        interval     = 10
-        timeout      = 1
-    }
+  metadata {
+    display_name = "RAM Usage"
+    key          = "1_ram_usage"
+    script       = "coder stat mem"
+    interval     = 10
+    timeout      = 1
+  }
 
-    metadata {
-        display_name = "Home Disk"
-        key          = "2_home_disk"
-        script       = "coder stat disk --path $HOME"
-        interval     = 60
-        timeout      = 1
-    }
-    startup_script = <<-EOT
+  metadata {
+    display_name = "Home Disk"
+    key          = "2_home_disk"
+    script       = "coder stat disk --path $HOME"
+    interval     = 60
+    timeout      = 1
+  }
+  startup_script = <<-EOT
     set -e
 
     # Create persistent bin directory
@@ -162,9 +199,9 @@ resource "coder_agent" "dev" {
 }
 
 module "coder-login" {
-    source   = "registry.coder.com/coder/coder-login/coder"
-    version  = "1.1.0"
-    agent_id = coder_agent.dev.id
+  source   = "registry.coder.com/coder/coder-login/coder"
+  version  = "1.1.0"
+  agent_id = coder_agent.dev.id
 }
 
 # Python 3.12 venv + Jupyter kernel for the workshop agent notebooks
@@ -173,12 +210,12 @@ module "coder-login" {
 # kernel, so this script is a fast no-op there. On a non pre-baked base image it
 # falls back to provisioning into the EFS-persistent home (one-time).
 resource "coder_script" "agent_python_kernel" {
-    agent_id           = coder_agent.dev.id
-    display_name       = "Python/Jupyter agent kernel"
-    icon               = "/icon/python.svg"
-    run_on_start       = true
-    start_blocks_login = false
-    script             = <<-EOT
+  agent_id           = coder_agent.dev.id
+  display_name       = "Python/Jupyter agent kernel"
+  icon               = "/icon/python.svg"
+  run_on_start       = true
+  start_blocks_login = false
+  script             = <<-EOT
     #!/bin/sh
     set -eu
 
@@ -205,10 +242,11 @@ resource "coder_script" "agent_python_kernel" {
       ipykernel \
       "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
       bedrock-agentcore bedrock-agentcore-starter-toolkit \
-      langchain langchain-core langchain-aws langchain-anthropic langchain-community langgraph \
+      langchain langchain-core langchain-aws langchain-anthropic langchain-openai langchain-community langgraph \
       "llama-index>=0.12.0" llama-index-core llama-index-llms-bedrock \
-      llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
+      llama-index-llms-bedrock-converse llama-index-embeddings-bedrock llama-index-llms-openai \
       llama-index-readers-file llama-cloud \
+      openai \
       strands-agents strands-agents-tools
     "$VENV/bin/python" -m ipykernel install --user \
       --name agents --display-name "Python (Agents)"
@@ -218,13 +256,13 @@ resource "coder_script" "agent_python_kernel" {
 }
 
 module "code-server" {
-    source   = "registry.coder.com/coder/code-server/coder"
-    version  = "1.3.1"
-    agent_id       = coder_agent.dev.id
-    folder         = local.home_dir
-    subdomain = false
-    order = 0
-    extensions = ["ms-toolsai.jupyter"]
+  source     = "registry.coder.com/coder/code-server/coder"
+  version    = "1.3.1"
+  agent_id   = coder_agent.dev.id
+  folder     = local.home_dir
+  subdomain  = false
+  order      = 0
+  extensions = ["ms-toolsai.jupyter"]
 }
 
 
@@ -246,7 +284,7 @@ resource "aws_efs_access_point" "home" {
   }
 
   tags = {
-    Name = "coder-${data.coder_workspace.me.name}-home"
+    Name                     = "coder-${data.coder_workspace.me.name}-home"
     "com.coder.workspace.id" = data.coder_workspace.me.id
   }
 }
@@ -291,7 +329,7 @@ resource "kubernetes_persistent_volume_claim" "home" {
 }
 
 resource "kubernetes_deployment" "dev" {
-  count = data.coder_workspace.me.start_count
+  count            = data.coder_workspace.me.start_count
   wait_for_rollout = false
   metadata {
     name      = "coder-${data.coder_workspace.me.id}"
@@ -342,7 +380,7 @@ resource "kubernetes_deployment" "dev" {
           "com.coder.user.username"    = data.coder_workspace_owner.me.name
           # Compute-lane selector: matched by the EKS Fargate profile
           # (compute=fargate) or excluded by it (compute=spot -> EC2 Spot NodePool).
-          "compute"                    = data.coder_parameter.compute_lane.value
+          "compute" = data.coder_parameter.compute_lane.value
         }
       }
       spec {
@@ -409,7 +447,7 @@ resource "kubernetes_deployment" "dev" {
 }
 
 resource "coder_metadata" "pod_info" {
-    count = data.coder_workspace.me.start_count
-    resource_id = kubernetes_deployment.dev[0].id
-    daily_cost = local.cost
+  count       = data.coder_workspace.me.start_count
+  resource_id = kubernetes_deployment.dev[0].id
+  daily_cost  = local.cost
 }
