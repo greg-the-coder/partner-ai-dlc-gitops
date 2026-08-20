@@ -19,6 +19,10 @@ A serverless Coder workspace running on **AWS Fargate** with the
 - **Kiro CLI** (`kiro-cli`, `kiro-cli-chat`) for interactive, command-line AI development
 - **Kiro IDE** web app
 - **MCP** (Model Context Protocol) support — pre-seeded `~/.kiro/settings/mcp.json`
+  with the [AWS Labs MCP servers](https://github.com/awslabs/mcp): core, AWS
+  documentation, CDK, AWS diagram, and Terraform (all run on demand via `uvx`).
+- **KiroCrew** (optional) — multi-agent Kiro orchestration gateway + dashboard,
+  enabled with the **Enable KiroCrew** parameter (see below).
 - **Amazon Bedrock** access via the workspace IAM role
 
 ### Developer environment
@@ -37,10 +41,22 @@ A serverless Coder workspace running on **AWS Fargate** with the
 
 | Parameter | Default | Range |
 |-----------|---------|-------|
-| CPU cores | 4 | 2–8 |
-| Memory (GB) | 8 | 4–16 |
+| CPU cores | 2 | 2–8 |
+| Memory (GB) | 4 | 4–16 |
+| Compute Lane | fargate | fargate / spot |
+| Enable KiroCrew | false | true / false |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
+
+### KiroCrew (optional)
+Set **Enable KiroCrew** to `true` to install the
+[KiroCrew](https://kiro.dev) multi-agent orchestration gateway and expose its
+dashboard as a Coder app. The **KiroCrew** app tile self-authenticates (a
+loopback redirector mints a short-lived token and 302s to the dashboard
+subdomain app), so no manual `kirocrew token` step is needed. Adds ~1–2 min to
+first start while the gateway and its managed Python venv are provisioned; the
+app's healthcheck surfaces readiness. For headless Kiro auth, create a Coder
+user secret targeting `KIRO_API_KEY`.
 
 ## Getting started
 1. Create a workspace from this template.

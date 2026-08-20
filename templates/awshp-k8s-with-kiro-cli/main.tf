@@ -1,22 +1,22 @@
 terraform {
-    required_providers {
-        kubernetes = {
-            source = "hashicorp/kubernetes"
-            version = "2.37.1"
-        }
-        coder = {
-            source  = "coder/coder"
-            version = ">= 2.13"
-        }
-        random = {
-            source = "hashicorp/random"
-            version = "3.7.2"
-        }
-        aws = {
-            source = "hashicorp/aws"
-            version = ">= 5.0"
-        }
+  required_providers {
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "2.37.1"
     }
+    coder = {
+      source  = "coder/coder"
+      version = ">= 2.13"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "3.7.2"
+    }
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
 }
 
 variable "namespace" {
@@ -37,74 +37,41 @@ variable "efs_file_system_id" {
   default     = ""
 }
 
-variable "mcp_api_key_fiddler" {
-  type        = string
-  description = "Fiddler AI API key (Bearer) for the Fiddler GenAI MCP server."
-  sensitive   = true
-  default     = ""
-}
-
-variable "fiddler_url" {
-  type        = string
-  description = "Fiddler instance base URL for the Fiddler GenAI MCP server (optional)."
-  default     = "https://app.fiddler.ai"
-}
-
-variable "mcp_api_key_langsmith" {
-  type        = string
-  description = "LangSmith API key (sent as X-Api-Key) for the LangSmith remote MCP server."
-  sensitive   = true
-  default     = ""
-}
-
-variable "mcp_api_key_llamacloud" {
-  type        = string
-  description = "LlamaCloud API key for the LlamaCloud MCP server."
-  sensitive   = true
-  default     = ""
-}
-
-variable "llamacloud_project_name" {
-  type        = string
-  description = "Optional LlamaCloud project name for the LlamaCloud MCP server."
-  default     = ""
-}
-
-variable "llamacloud_index" {
-  type        = string
-  description = "Optional LlamaCloud index ('name:description') exposed as a tool by the LlamaCloud MCP server."
-  default     = ""
-}
-
 locals {
-  home_dir        = "/home/coder"
+  home_dir = "/home/coder"
 
-  # MCP servers shared by Kiro (mcp.json) and Claude Code (user scope):
-  # Fiddler GenAI (observability) + LangSmith (LangChain) as remote HTTP,
-  # LlamaCloud (LlamaIndex) over stdio via uvx. Security partners (HiddenLayer,
-  # Protopia) have no MCP server; their SDKs are pre-baked in the image instead.
-  mcp_servers = merge(
-    {
-      "fiddler-genai" = {
-        type    = "http"
-        url     = "${var.fiddler_url}/v1/mcp/genai/"
-        headers = { Authorization = "Bearer ${var.mcp_api_key_fiddler}" }
-      }
-      "langsmith" = {
-        type    = "http"
-        url     = "https://api.smith.langchain.com/mcp"
-        headers = { "X-Api-Key" = var.mcp_api_key_langsmith }
-      }
-      "llamacloud" = {
-        command = "/usr/local/bin/uvx"
-        args = concat(
-          ["llamacloud-mcp@latest", "--api-key", var.mcp_api_key_llamacloud],
-          var.llamacloud_project_name != "" ? ["--project-name", var.llamacloud_project_name] : [],
-          var.llamacloud_index != "" ? ["--index", var.llamacloud_index] : [],
-        )
-      }
+  # AWS MCP servers wired into Kiro CLI (mcp.json). All run over stdio via `uvx`
+  # (pinned @latest) with quiet logging. These replace the former third-party
+  # (Fiddler / LangSmith / LlamaCloud) servers so the workshop agents get
+  # first-class AWS documentation, CDK, Terraform, and diagram tooling out of the
+  # box. See https://github.com/awslabs/mcp for each server's capabilities.
+  mcp_servers = {
+    "awslabs.core-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.core-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
     }
-  )
+    "awslabs.aws-documentation-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.aws-documentation-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
+    }
+    "awslabs.cdk-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.cdk-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+    }
+    "awslabs.aws-diagram-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.aws-diagram-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+    }
+    "awslabs.terraform-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.terraform-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+    }
+  }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
 }
 
@@ -164,54 +131,69 @@ data "coder_parameter" "compute_lane" {
   }
 }
 
+# Opt-in KiroCrew: multi-agent Kiro orchestration gateway + dashboard. When
+# enabled the kirocrew module installs the KiroCrew CLI/gateway and surfaces a
+# self-authenticating dashboard app tile. Disabled by default to keep the base
+# workspace lean.
+data "coder_parameter" "enable_kirocrew" {
+  name         = "enable_kirocrew"
+  display_name = "Enable KiroCrew"
+  description  = "Install KiroCrew (multi-agent Kiro orchestration) and expose its dashboard as a Coder app. Adds ~1-2 min to first start while the gateway + managed Python venv are provisioned."
+  type         = "bool"
+  default      = "false"
+  mutable      = true
+  order        = 4
+  icon         = "/icon/kiro.svg"
+}
+
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
 locals {
-    cost = 2
-    home_folder = "/home/coder"
+  cost        = 2
+  home_folder = "/home/coder"
 }
 
 resource "coder_agent" "dev" {
-    arch = "amd64"
-    os = "linux"
+  arch = "amd64"
+  os   = "linux"
 
-    env = {
-        PATH = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    }
-    display_apps {
-        vscode          = false
-        vscode_insiders = false
-        web_terminal    = true
-        ssh_helper      = false
-    }
+  env = {
+    PATH = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  }
+  display_apps {
+    vscode          = false
+    vscode_insiders = false
+    web_terminal    = true
+    ssh_helper      = false
+  }
 
-    # Live workspace resource utilization shown in the Coder dashboard,
-    # using the agent's built-in `coder stat` command (pod/container-scoped).
-    metadata {
-        display_name = "CPU Usage"
-        key          = "0_cpu_usage"
-        script       = "coder stat cpu"
-        interval     = 10
-        timeout      = 1
-    }
+  # Live workspace resource utilization shown in the Coder dashboard,
+  # using the agent's built-in `coder stat` command (pod/container-scoped).
+  metadata {
+    display_name = "CPU Usage"
+    key          = "0_cpu_usage"
+    script       = "coder stat cpu"
+    interval     = 10
+    timeout      = 1
+  }
 
-    metadata {
-        display_name = "RAM Usage"
-        key          = "1_ram_usage"
-        script       = "coder stat mem"
-        interval     = 10
-        timeout      = 1
-    }
+  metadata {
+    display_name = "RAM Usage"
+    key          = "1_ram_usage"
+    script       = "coder stat mem"
+    interval     = 10
+    timeout      = 1
+  }
 
-    metadata {
-        display_name = "Home Disk"
-        key          = "2_home_disk"
-        script       = "coder stat disk --path $HOME"
-        interval     = 60
-        timeout      = 1
-    }
-    startup_script = <<-EOT
+  metadata {
+    display_name = "Home Disk"
+    key          = "2_home_disk"
+    script       = "coder stat disk --path $HOME"
+    interval     = 60
+    timeout      = 1
+  }
+  startup_script = <<-EOT
     set -e
 
     # Create persistent bin directory
@@ -221,7 +203,22 @@ resource "coder_agent" "dev" {
     # Update PATH for current session
     export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
 
-    # Configure Kiro CLI MCP servers (Fiddler GenAI, LangSmith, LlamaCloud)
+    # Ensure uvx is available for the AWS MCP servers (each runs over stdio via
+    # `uvx`). The workshop image pre-bakes uv/uvx under /usr/local/bin, so this is
+    # a no-op there; otherwise it installs into $HOME/.local/bin (on PATH above).
+    if ! command -v uvx >/dev/null 2>&1; then
+      export UV_UNMANAGED_INSTALL="$HOME/.local/bin"
+      curl -LsSf https://astral.sh/uv/install.sh | sh || true
+    fi
+
+    # The AWS diagram MCP server renders via graphviz's `dot`; install it once if
+    # missing so diagram generation works (best-effort, non-fatal).
+    if ! command -v dot >/dev/null 2>&1; then
+      sudo apt-get update -qq || true
+      sudo apt-get install -y graphviz >/dev/null 2>&1 || true
+    fi
+
+    # Configure Kiro CLI MCP servers (AWS: core, docs, CDK, diagram, terraform)
     echo "Configuring Kiro CLI MCP servers..."
 
     # Create user-level MCP configuration
@@ -231,6 +228,18 @@ ${local.mcp_json}
 MCP_EOF
 
     echo "Kiro CLI MCP configuration completed (user-level)"
+
+    # KiroCrew prerequisites (only when the KiroCrew option is enabled). KiroCrew
+    # provisions a managed Python venv (>=3.10) and its installer verifies a
+    # signed manifest with openssl/sha256sum. Best-effort; the module's script
+    # installs the CLI/gateway and its healthcheck surfaces any failure.
+    if [ "${data.coder_parameter.enable_kirocrew.value}" = "true" ]; then
+      echo "Ensuring KiroCrew prerequisites..."
+      if ! python3 -m venv --help >/dev/null 2>&1; then
+        sudo apt-get update -qq || true
+        sudo apt-get install -y python3-venv python3-dev >/dev/null 2>&1 || true
+      fi
+    fi
 
     # Configure workspace trust settings for Kiro IDE
     echo "Configuring Kiro IDE workspace trust..."
@@ -266,9 +275,9 @@ TRUST_EOF
 }
 
 module "coder-login" {
-    source   = "registry.coder.com/coder/coder-login/coder"
-    version  = "1.1.0"
-    agent_id = coder_agent.dev.id
+  source   = "registry.coder.com/coder/coder-login/coder"
+  version  = "1.1.0"
+  agent_id = coder_agent.dev.id
 }
 
 # Python 3.12 venv + Jupyter kernel for the workshop agent notebooks
@@ -277,12 +286,12 @@ module "coder-login" {
 # kernel, so this script is a fast no-op there. On a non pre-baked base image it
 # falls back to provisioning into the EFS-persistent home (one-time).
 resource "coder_script" "agent_python_kernel" {
-    agent_id           = coder_agent.dev.id
-    display_name       = "Python/Jupyter agent kernel"
-    icon               = "/icon/python.svg"
-    run_on_start       = true
-    start_blocks_login = false
-    script             = <<-EOT
+  agent_id           = coder_agent.dev.id
+  display_name       = "Python/Jupyter agent kernel"
+  icon               = "/icon/python.svg"
+  run_on_start       = true
+  start_blocks_login = false
+  script             = <<-EOT
     #!/bin/sh
     set -eu
 
@@ -322,20 +331,36 @@ resource "coder_script" "agent_python_kernel" {
 }
 
 module "code-server" {
-    source   = "registry.coder.com/coder/code-server/coder"
-    version  = "1.3.1"
-    agent_id       = coder_agent.dev.id
-    folder         = local.home_folder
-    subdomain = false
-    order = 0
-    extensions = ["ms-toolsai.jupyter"]
+  source     = "registry.coder.com/coder/code-server/coder"
+  version    = "1.3.1"
+  agent_id   = coder_agent.dev.id
+  folder     = local.home_folder
+  subdomain  = false
+  order      = 0
+  extensions = ["ms-toolsai.jupyter"]
 }
 
 module "kiro" {
-    source   = "registry.coder.com/coder/kiro/coder"
-    version  = "1.1.0"
-    agent_id = coder_agent.dev.id
-    order = 1
+  source   = "registry.coder.com/coder/kiro/coder"
+  version  = "1.1.0"
+  agent_id = coder_agent.dev.id
+  order    = 1
+}
+
+# Opt-in KiroCrew gateway + self-authenticating dashboard app. Instantiated only
+# when the enable_kirocrew parameter is set. The module derives the dashboard
+# app's subdomain origin (which, in this deployment, INCLUDES the agent-name
+# segment "dev"), trusts it in the gateway Host/Origin allowlist, sets
+# dashboard.url, and runs a token-minting redirector so the visible tile
+# self-authenticates.
+module "kirocrew" {
+  count      = data.coder_parameter.enable_kirocrew.value == "true" ? 1 : 0
+  source     = "./modules/kirocrew"
+  agent_id   = coder_agent.dev.id
+  agent_name = "dev"
+  port       = 8899
+  use_cached = true
+  order      = 3
 }
 
 # Auto-install the Jupyter extension for the Kiro IDE.
@@ -344,12 +369,12 @@ module "kiro" {
 # immediately if the server is already present, otherwise via a one-time
 # background poller. Dependencies resolve automatically from Open VSX.
 resource "coder_script" "kiro_jupyter_extension" {
-    agent_id           = coder_agent.dev.id
-    display_name       = "Kiro: install Jupyter extension"
-    icon               = "/icon/kiro.svg"
-    run_on_start       = true
-    start_blocks_login = false
-    script             = <<-EOT
+  agent_id           = coder_agent.dev.id
+  display_name       = "Kiro: install Jupyter extension"
+  icon               = "/icon/kiro.svg"
+  run_on_start       = true
+  start_blocks_login = false
+  script             = <<-EOT
     #!/bin/sh
     set -eu
     EXT_ID="ms-toolsai.jupyter"
@@ -388,13 +413,13 @@ resource "coder_script" "kiro_jupyter_extension" {
 }
 
 resource "coder_app" "kiro_cli" {
-    agent_id     = coder_agent.dev.id
-    slug         = "kiro-auth"
-    display_name = "Kiro CLI"
-    icon         = "${data.coder_workspace.me.access_url}/icon/kiro.svg"
-    command      = "kiro-cli"
-    share        = "owner"
-    order        = 2
+  agent_id     = coder_agent.dev.id
+  slug         = "kiro-auth"
+  display_name = "Kiro CLI"
+  icon         = "${data.coder_workspace.me.access_url}/icon/kiro.svg"
+  command      = "kiro-cli"
+  share        = "owner"
+  order        = 2
 }
 
 
@@ -416,7 +441,7 @@ resource "aws_efs_access_point" "home" {
   }
 
   tags = {
-    Name = "coder-${data.coder_workspace.me.name}-home"
+    Name                     = "coder-${data.coder_workspace.me.name}-home"
     "com.coder.workspace.id" = data.coder_workspace.me.id
   }
 }
@@ -461,7 +486,7 @@ resource "kubernetes_persistent_volume_claim" "home" {
 }
 
 resource "kubernetes_deployment" "dev" {
-  count = data.coder_workspace.me.start_count
+  count            = data.coder_workspace.me.start_count
   wait_for_rollout = false
   metadata {
     name      = "coder-${data.coder_workspace.me.id}"
@@ -512,7 +537,7 @@ resource "kubernetes_deployment" "dev" {
           "com.coder.user.username"    = data.coder_workspace_owner.me.name
           # Compute-lane selector: matched by the EKS Fargate profile
           # (compute=fargate) or excluded by it (compute=spot -> EC2 Spot NodePool).
-          "compute"                    = data.coder_parameter.compute_lane.value
+          "compute" = data.coder_parameter.compute_lane.value
         }
       }
       spec {
@@ -579,7 +604,7 @@ resource "kubernetes_deployment" "dev" {
 }
 
 resource "coder_metadata" "pod_info" {
-    count = data.coder_workspace.me.start_count
-    resource_id = kubernetes_deployment.dev[0].id
-    daily_cost = local.cost
+  count       = data.coder_workspace.me.start_count
+  resource_id = kubernetes_deployment.dev[0].id
+  daily_cost  = local.cost
 }

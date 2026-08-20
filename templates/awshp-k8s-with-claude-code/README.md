@@ -20,6 +20,10 @@ persisted on **Amazon EFS** so work survives workspace restarts.
   reporting back to Coder (`report_tasks = true`)
 - **Amazon Bedrock** integration — defaults to Claude Opus 4.8
   (`global.anthropic.claude-opus-4-8`) via the workspace IAM role
+- **MCP** (Model Context Protocol) — the
+  [AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS
+  documentation, CDK, AWS diagram, and Terraform) are added to Claude Code at
+  user scope and run on demand via `uvx`.
 
 ### Developer environment
 - **code-server** (VS Code in the browser) and **Kiro IDE** web app
