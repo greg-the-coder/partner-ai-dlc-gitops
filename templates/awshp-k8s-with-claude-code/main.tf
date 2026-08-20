@@ -39,7 +39,7 @@ variable "efs_file_system_id" {
 
 variable "anthropic_model" {
   type        = string
-  description = "The AWS Inference profile ID of the base Anthropic model to use with Claude Code"
+  description = "Model id Claude Code requests through the Coder AI Gateway. Must match a model registered on the gateway's Bedrock provider (see ai-providers/); defaults to the Claude Opus 4.6 Bedrock inference profile."
   default     = "global.anthropic.claude-opus-4-6-v1"
 }
 
@@ -140,12 +140,6 @@ data "coder_parameter" "compute_lane" {
 
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
-
-resource "coder_env" "bedrock_use" {
-  agent_id = coder_agent.dev.id
-  name     = "CLAUDE_CODE_USE_BEDROCK"
-  value    = "1"
-}
 
 resource "coder_env" "path" {
   agent_id = coder_agent.dev.id
@@ -329,6 +323,18 @@ module "claude-code" {
   report_tasks                 = true
   dangerously_skip_permissions = true
   mcp                          = local.mcp_json
+
+  # Route Claude Code's LLM traffic through the Coder AI Gateway (formerly AI
+  # Bridge) instead of talking to AWS Bedrock directly. The module injects
+  #   ANTHROPIC_BASE_URL = <access_url>/api/v2/aibridge/anthropic
+  #   CLAUDE_API_KEY     = the workspace owner's Coder session token
+  # so the gateway authenticates the user by their Coder token and forwards the
+  # request to the admin-configured Bedrock provider (see ai-providers/) using
+  # the control plane's centrally-held credentials. No AWS creds or
+  # CLAUDE_CODE_USE_BEDROCK are needed in the workspace for the model call, and
+  # all usage is governed/observable via AI Gateway.
+  # NOTE: AI Gateway requires Coder v2.32+ with the AI Governance Add-On enabled.
+  enable_aibridge = true
 
   pre_install_script = <<-EOF
     set -e

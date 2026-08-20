@@ -18,8 +18,14 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 ### AI assistant
 - **Claude Code** CLI (`@anthropic-ai/claude-code`) with **task automation** and task
   reporting back to Coder (`report_tasks = true`)
-- **Amazon Bedrock** integration — defaults to Claude Opus 4.6
-  (`global.anthropic.claude-opus-4-6-v1`) via the workspace IAM role
+- **Coder AI Gateway** routing — Claude Code's model requests go through the Coder AI
+  Gateway (`ANTHROPIC_BASE_URL = <access_url>/api/v2/aibridge/anthropic`), authenticated
+  with the user's Coder session token (`enable_aibridge = true`). The gateway forwards to
+  the admin-configured Amazon Bedrock provider (default **Claude Opus 4.6**,
+  `global.anthropic.claude-opus-4-6-v1`) using the control plane's centrally-held
+  credentials — no AWS keys or `CLAUDE_CODE_USE_BEDROCK` in the workspace — so all usage is
+  centrally governed and observable.
+  > Requires Coder v2.32+ with the **AI Governance Add-On** enabled on the deployment.
 - **MCP** (Model Context Protocol) — the
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS
   documentation, CDK, AWS diagram, and Terraform) are added to Claude Code at
