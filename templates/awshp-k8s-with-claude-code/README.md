@@ -18,8 +18,8 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 ### AI assistant
 - **Claude Code** CLI (`@anthropic-ai/claude-code`) with **task automation** and task
   reporting back to Coder (`report_tasks = true`)
-- **Amazon Bedrock** integration — defaults to Claude Opus 4.8
-  (`global.anthropic.claude-opus-4-8`) via the workspace IAM role
+- **Amazon Bedrock** integration — defaults to Claude Opus 4.6
+  (`global.anthropic.claude-opus-4-6-v1`) via the workspace IAM role
 - **MCP** (Model Context Protocol) — the
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS
   documentation, CDK, AWS diagram, and Terraform) are added to Claude Code at
@@ -43,6 +43,7 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 |-----------|---------|-------|
 | CPU cores | 4 | 2–8 |
 | Memory (GB) | 8 | 4–16 |
+| Compute Lane | fargate | fargate / spot |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
 

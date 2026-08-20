@@ -65,6 +65,7 @@ agentic-AI libraries and AWS tooling baked into the image.
 |-----------|---------|-------|
 | CPU cores | 4 | 2–8 |
 | Memory (GB) | 8 | 4–16 |
+| Compute Lane | fargate | fargate / spot |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
 

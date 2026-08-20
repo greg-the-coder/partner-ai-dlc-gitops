@@ -1,6 +1,6 @@
 ---
 display_name: AWS Workshop - Kubernetes with Kiro CLI
-description: Fargate workspace with the Kiro CLI AI assistant, AWS CLI/CDK, Node.js, Nirmata CLI, and Amazon Bedrock access.
+description: Fargate workspace with the Kiro CLI AI assistant, AWS Labs MCP servers (optional KiroCrew), AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
@@ -30,7 +30,6 @@ A serverless Coder workspace running on **AWS Fargate** with the
 - One-click **Kiro CLI** authentication app (`kiro-auth`)
 - Web terminal
 - Node.js 20 LTS, AWS CLI v2, AWS CDK
-- Nirmata CLI (`nctl`)
 
 ## Runtime & infrastructure
 - **Compute:** AWS Fargate (namespace `coder-ws`), no EC2 worker nodes

@@ -69,7 +69,7 @@ provider "coderd" {
 resource "coderd_template" "awshp-k8s-with-claude-code" {
   name        = "awshp-k8s-base-claudecode"
   display_name = "AWS Workshop - Kubernetes with Claude Code"
-  description = "Fargate workspace with Claude Code AI assistant + task automation, AWS CLI/CDK, Node.js, and Bedrock access."
+  description = "Fargate workspace with Claude Code AI assistant + task automation, AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Bedrock access."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-claude-code"
@@ -94,7 +94,7 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
 resource "coderd_template" "awshp-k8s-with-kiro_cli" {
   name        = "awshp-k8s-base-kirocli"
   display_name = "AWS Workshop - Kubernetes with Kiro CLI"
-  description = "Fargate workspace with Kiro CLI AI assistant, AWS CLI/CDK, Node.js, and Bedrock access."
+  description = "Fargate workspace with Kiro CLI AI assistant, AWS Labs MCP servers (optional KiroCrew), AWS CLI/CDK, Node.js, and Bedrock access."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-kiro-cli"
@@ -123,7 +123,7 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
 resource "coderd_template" "challenge-agent" {
   name        = "awshp-k8s-challenge-agent"
   display_name = "Clash of Agents - Challenge Workspace"
-  description = "Optimized for Coder Agents: Python agent frameworks (Strands, LangGraph, LlamaIndex, Lyzr) + Bedrock on Fargate."
+  description = "Optimized for Coder Agents: Python agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr) + Bedrock on Fargate."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-challenge-agent"
