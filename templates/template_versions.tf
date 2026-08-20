@@ -69,7 +69,7 @@ provider "coderd" {
 resource "coderd_template" "awshp-k8s-with-claude-code" {
   name        = "awshp-k8s-base-claudecode"
   display_name = "AWS Workshop - Kubernetes with Claude Code"
-  description = "Fargate workspace with Claude Code AI assistant (via Coder AI Gateway) + task automation, AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Bedrock access."
+  description = "Fargate Claude Code workspace routed via Coder AI Gateway, with AWS Labs MCP servers, task automation, AWS CLI/CDK, Bedrock."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-claude-code"
@@ -94,7 +94,7 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
 resource "coderd_template" "awshp-k8s-with-kiro_cli" {
   name        = "awshp-k8s-base-kirocli"
   display_name = "AWS Workshop - Kubernetes with Kiro CLI"
-  description = "Fargate workspace with Kiro CLI AI assistant, AWS Labs MCP servers (optional KiroCrew), AWS CLI/CDK, Node.js, and Bedrock access."
+  description = "Fargate Kiro CLI workspace with AWS Labs MCP servers (optional KiroCrew), AWS CLI/CDK, Node.js, and Bedrock access."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-kiro-cli"
