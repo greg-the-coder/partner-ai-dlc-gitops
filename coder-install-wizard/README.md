@@ -108,6 +108,13 @@ partner-coder-wizard validate \
   --cluster    coder-aws-cluster \
   --efs-id     fs-0123456789abcdef0 \
   --stack-name coder-aws-cluster-coder
+
+# Long install from a short-lived shell (e.g. CloudShell): launch + hand off
+partner-coder-wizard deploy --admin-email ops@example.com --no-wait
+
+# Check status / stream events later (from any shell)
+partner-coder-wizard status --cluster coder-aws-cluster
+partner-coder-wizard watch  --cluster coder-aws-cluster        # Ctrl-C safe
 ```
 
 ---
@@ -217,6 +224,28 @@ exists**, the wizard will **not** auto-delete it (that delete would hit a VPC
 `DependencyViolation`); it prints an `eksctl delete cluster` + `delete-stack` runbook
 instead.
 
+## Long installs & short-lived shells (CloudShell)
+
+The core stack takes ~35–45 minutes, longer than an idle AWS CloudShell session. The
+deployment itself runs server-side (CloudFormation + CodeBuild), so a dropped shell does
+**not** stop it — only the wizard's live view goes away. The wizard is built for this:
+
+- **Durable links on submit.** The moment each stack is created, the wizard prints its
+  CloudFormation events URL, CodeBuild console URL + `aws logs tail` command, a status
+  one-liner, and a **"safe to close this shell"** note.
+- **`--no-wait` (hand-off).** `deploy --no-wait` submits the core stack, prints the links,
+  and exits immediately instead of blocking. Finish with `deploy --retry` (validates +
+  prints the summary once the stack is `CREATE_COMPLETE`).
+- **Ctrl-C is safe.** Interrupting the live event stream detaches the wizard, not the
+  deployment; it prints how to reattach.
+- **Reattach from any shell:**
+  - `partner-coder-wizard status --cluster <name>` — one-shot status + console links for
+    both stacks.
+  - `partner-coder-wizard watch --cluster <name>` (or `--stack <name>`) — stream events
+    until the stack finishes (Ctrl-C safe).
+  - `partner-coder-wizard deploy --retry` — once the core stack is complete, this resolves
+    to "skip → validate" and prints the post-install summary.
+
 ## Resuming a failed deployment (`--retry`)
 
 Every live `deploy` saves its **non-secret** parameters to
@@ -247,7 +276,7 @@ need to re-apply a license.
 
 ```
 coder_wizard/
-├── __main__.py       ← CLI entry point, wizard UI, sub-command dispatch
+├── __main__.py       ← CLI entry point, wizard UI, sub-command dispatch (incl. status/watch)
 ├── preflight.py      ← Pre-flight check suite (credentials, quotas, Bedrock, Spot, ECR)
 ├── deploy.py         ← CloudFormation deploy orchestrator + CodeBuild waiter
 ├── validate.py       ← Post-install validation (Coder API, license, both lanes, EFS)

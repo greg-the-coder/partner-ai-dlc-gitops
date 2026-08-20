@@ -200,6 +200,39 @@ def _parse_spot_fraction(raw: str) -> float:
 # Sub-commands
 # ---------------------------------------------------------------------------
 
+def _cfn_events_url(region: str, stack_ref: str) -> str:
+    from urllib.parse import quote
+    return (f"https://{region}.console.aws.amazon.com/cloudformation/home?region={region}"
+            f"#/stacks/events?stackId={quote(stack_ref, safe='')}")
+
+
+def _codebuild_url(region: str, project: str) -> str:
+    return (f"https://{region}.console.aws.amazon.com/codesuite/codebuild/projects/"
+            f"{project}/history?region={region}")
+
+
+def _print_launch_info(label: str, stack_name: str, stack_id: str, region: str,
+                       codebuild_project: str | None = None) -> None:
+    """Print durable console links for a just-submitted stack + a safe-to-close note."""
+    ref = stack_id or stack_name
+    print(ok(f"{label} stack submitted: {stack_name}"))
+    print(info(f"  CloudFormation : {_cfn_events_url(region, ref)}"))
+    if codebuild_project:
+        print(info(f"  CodeBuild      : {_codebuild_url(region, codebuild_project)}"))
+        print(info(f"  Build logs     : aws logs tail /aws/codebuild/{codebuild_project} --follow --region {region}"))
+    print(info(f"  Status         : aws cloudformation describe-stacks --stack-name {stack_name} "
+               f"--region {region} --query 'Stacks[0].StackStatus' --output text"))
+    print(dim("  Safe to close this shell — the deployment continues server-side."))
+
+
+def _print_reattach_help(stack_name: str, region: str, cluster: str) -> None:
+    print()
+    print(info("Monitor or finish up later (this shell is not required):"))
+    print(info(f"  Watch events : partner-coder-wizard watch  --stack {stack_name} --region {region}"))
+    print(info(f"  Quick status : partner-coder-wizard status --cluster {cluster} --region {region}"))
+    print(info(f"  Finish/verify: partner-coder-wizard deploy --retry   # validates + prints the summary once complete"))
+
+
 def _state_path() -> Path:
     return Path(os.path.expanduser("~/.coder-wizard/last-deploy.json"))
 
@@ -394,6 +427,60 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    _section("Deployment Status")
+    if getattr(args, "stack", ""):
+        stacks = [(args.stack, None)]
+    else:
+        stacks = [
+            (f"{args.cluster}-image-pipeline", f"{args.cluster}-workspace-image-build"),
+            (f"{args.cluster}-coder", f"CodeBuild-{args.cluster}-coder"),
+        ]
+    for name, cb in stacks:
+        status = deploy.get_stack_status(name, args.region)
+        if status is None:
+            print(warn(f"{name}: not found"))
+            continue
+        line = ok if status in deploy.SUCCESS_STATUSES else (fail if status in deploy.RECREATE_STATUSES else info)
+        print(line(f"{name}: {status}"))
+        print(info(f"  {_cfn_events_url(args.region, deploy.get_stack_id(name, args.region) or name)}"))
+        if cb:
+            print(info(f"  CodeBuild: {_codebuild_url(args.region, cb)}"))
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    stack = getattr(args, "stack", "") or f"{args.cluster}-coder"
+    _section(f"Watching {stack}")
+    if deploy.get_stack_status(stack, args.region) is None:
+        print(fail(f"Stack '{stack}' not found in {args.region}."))
+        return 1
+    print(dim("  (Ctrl-C is safe — it stops watching, not the deployment.)"))
+    print()
+
+    def _ev(evt: deploy.StackEvent) -> None:
+        icon = "🔄" if "IN_PROGRESS" in evt.status else ("✅" if "COMPLETE" in evt.status else "❌")
+        print(f"  {icon}  {evt.timestamp[11:19]}  {evt.logical_id:<35} {evt.status}")
+
+    try:
+        res = deploy.wait_for_stack(stack, args.region, on_event=_ev)
+    except KeyboardInterrupt:
+        print()
+        print(info("Stopped watching. The deployment continues server-side."))
+        return 0
+
+    print()
+    if res.success:
+        print(ok(f"{stack} reached a successful terminal state."))
+        url = res.outputs.get("CoderURL", "")
+        if url:
+            print(info(f"Coder URL: {url}"))
+        print(info("Run 'partner-coder-wizard deploy --retry' to validate and print the summary."))
+        return 0
+    print(fail(f"{stack} ended in a failed state: {res.error}"))
+    return 1
+
+
 def _build_params(args: argparse.Namespace, admin_password: str) -> tuple[dict, dict]:
     """Return (pipeline_params, core_params) dicts from parsed args."""
     pipeline_params = {
@@ -577,31 +664,43 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         print(info("Building and pushing the workspace images to ECR (~10–20 min)."))
         print()
 
-        pipeline_result = deploy.deploy_stack(
-            stack_name=pipeline_stack,
-            template_path=args.pipeline_template,
-            parameters=pipeline_params,
-            region=args.region,
-            on_event=_on_pipeline_event,
-        )
+        def _pipeline_on_submit(stack_id: str) -> None:
+            _print_launch_info("Image pipeline", pipeline_stack, stack_id, args.region,
+                               codebuild_project=f"{args.cluster}-workspace-image-build")
 
-        if not pipeline_result.success:
+        try:
+            pipeline_result = deploy.deploy_stack(
+                stack_name=pipeline_stack,
+                template_path=args.pipeline_template,
+                parameters=pipeline_params,
+                region=args.region,
+                on_event=_on_pipeline_event,
+                on_submit=_pipeline_on_submit,
+            )
+
+            if not pipeline_result.success:
+                print()
+                print(fail(f"Image pipeline stack failed: {pipeline_result.error}"))
+                print(info(f"Check CodeBuild logs: /aws/codebuild/{args.cluster}-workspace-image-build"))
+                return 1
+
             print()
-            print(fail(f"Image pipeline stack failed: {pipeline_result.error}"))
-            print(info(f"Check CodeBuild logs: /aws/codebuild/{args.cluster}-workspace-image-build"))
-            return 1
+            print(ok("Image pipeline stack complete. Waiting for CodeBuild to finish building images..."))
 
-        print()
-        print(ok("Image pipeline stack complete. Waiting for CodeBuild to finish building images..."))
+            codebuild_project = f"{args.cluster}-workspace-image-build"
+            built = deploy.wait_for_codebuild(codebuild_project, args.region, timeout=2400)
+            if not built:
+                print(fail("CodeBuild workspace image build did not complete successfully."))
+                print(info(f"Check logs: aws logs tail /aws/codebuild/CodeBuild-{pipeline_stack}"))
+                return 1
 
-        codebuild_project = f"{args.cluster}-workspace-image-build"
-        built = deploy.wait_for_codebuild(codebuild_project, args.region, timeout=2400)
-        if not built:
-            print(fail("CodeBuild workspace image build did not complete successfully."))
-            print(info(f"Check logs: aws logs tail /aws/codebuild/CodeBuild-{pipeline_stack}"))
-            return 1
-
-        print(ok("Workspace images built and pushed to ECR."))
+            print(ok("Workspace images built and pushed to ECR."))
+        except KeyboardInterrupt:
+            print()
+            print(warn("Detached from the image pipeline (Ctrl-C). It continues server-side."))
+            print(info(f"  Watch: partner-coder-wizard watch --stack {pipeline_stack} --region {args.region}"))
+            print(info("  Once the image build finishes, re-run the wizard to continue with the core stack."))
+            return 0
 
     # ── 4. Core Coder stack ────────────────────────────────────────────────
     core_stack = f"{args.cluster}-coder"
@@ -627,19 +726,40 @@ def cmd_deploy(args: argparse.Namespace) -> int:
             outputs=deploy.get_stack_outputs(core_stack, args.region),
         )
     else:
+        wait_core = not getattr(args, "no_wait", False)
         print(info("This provisions EKS (Auto Mode) + Fargate profile + EC2 Spot NodePool, "
                    "Aurora, EFS, CloudFront, installs Coder, and applies the license (~35–45 min)."))
         print(info("Rollback is disabled (--on-failure DO_NOTHING): on failure the stack is left in "
                    "place so Aurora/EFS and the EKS cluster survive for diagnosis or retry."))
         print()
-        core_result = deploy.deploy_stack(
-            stack_name=core_stack,
-            template_path=args.core_template,
-            parameters=core_params,
-            region=args.region,
-            on_event=_on_core_event,
-            on_failure="DO_NOTHING",
-        )
+
+        def _core_on_submit(stack_id: str) -> None:
+            _print_launch_info("Core Coder", core_stack, stack_id, args.region,
+                               codebuild_project=f"CodeBuild-{core_stack}")
+
+        try:
+            core_result = deploy.deploy_stack(
+                stack_name=core_stack,
+                template_path=args.core_template,
+                parameters=core_params,
+                region=args.region,
+                on_event=_on_core_event,
+                on_failure="DO_NOTHING",
+                wait=wait_core,
+                on_submit=_core_on_submit,
+            )
+        except KeyboardInterrupt:
+            print()
+            print(warn("Detached from the live event stream (Ctrl-C). The core deployment continues server-side."))
+            _print_reattach_help(core_stack, args.region, args.cluster)
+            return 0
+
+        if core_result.pending:
+            print()
+            print(ok("Core stack launched — it will continue to completion server-side (~35–45 min)."))
+            _print_reattach_help(core_stack, args.region, args.cluster)
+            return 0
+
         if not core_result.success:
             print()
             print(fail(f"Core stack failed: {core_result.error}"))
@@ -831,6 +951,7 @@ def cmd_wizard(_args: argparse.Namespace) -> int:
     deploy_args.dry_run = dry_run
     deploy_args.dry_run_output = f"coder-deploy-{cluster}"
     deploy_args.retry_flag = False
+    deploy_args.no_wait = getattr(_args, "no_wait", False)
 
     return cmd_deploy(deploy_args)
 
@@ -854,6 +975,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Skip the 'deploy now?' prompt and go straight to dry-run output")
     wizard_p.add_argument("--retry", dest="retry_flag", action="store_true",
                           help="Resume the last deployment using saved parameters (RetryFlag=True)")
+    wizard_p.add_argument("--no-wait", dest="no_wait", action="store_true",
+                          help="Submit the core stack and exit with monitoring links instead of waiting")
     wizard_p.set_defaults(func=cmd_wizard)
 
     # ── preflight ──────────────────────────────────────────────────────────
@@ -900,6 +1023,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Resume the last deployment using saved parameters: reloads the last "
                           "params, assesses the image-pipeline and core stacks, and recreates/resumes "
                           "the core stack with CFN RetryFlag=True.")
+    dep.add_argument("--no-wait", dest="no_wait", action="store_true",
+                     help="Submit the core stack and exit with console/monitoring links instead of "
+                          "waiting ~35-45 min (useful for short-lived shells like AWS CloudShell). "
+                          "Finish with 'deploy --retry' or 'validate' once it completes.")
     dep.set_defaults(func=cmd_deploy)
 
     # ── validate ───────────────────────────────────────────────────────────
@@ -911,6 +1038,20 @@ def build_parser() -> argparse.ArgumentParser:
     val.add_argument("--token",       default="", help="Coder session token (or set --stack-name to auto-retrieve)")
     val.add_argument("--stack-name",  default="",  help="CloudFormation stack name for token auto-retrieval")
     val.set_defaults(func=cmd_validate)
+
+    # ── status ─────────────────────────────────────────────────
+    stp = sub.add_parser("status", help="Show stack status + console links for a deployment")
+    stp.add_argument("--region",  default=_get_current_region())
+    stp.add_argument("--cluster", default=DEFAULT_CLUSTER)
+    stp.add_argument("--stack",   default="", help="Specific stack name (overrides --cluster)")
+    stp.set_defaults(func=cmd_status)
+
+    # ── watch ────────────────────────────────────────────────
+    wtp = sub.add_parser("watch", help="Stream a stack's events until it finishes (Ctrl-C safe)")
+    wtp.add_argument("--region",  default=_get_current_region())
+    wtp.add_argument("--cluster", default=DEFAULT_CLUSTER)
+    wtp.add_argument("--stack",   default="", help="Specific stack name (default: <cluster>-coder)")
+    wtp.set_defaults(func=cmd_watch)
 
     return parser
 

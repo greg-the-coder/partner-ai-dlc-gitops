@@ -33,6 +33,8 @@ class DeployResult:
     success: bool
     outputs: dict = field(default_factory=dict)
     error: str = ""
+    stack_id: str = ""
+    pending: bool = False  # True when the stack was submitted but not waited on (hand-off)
 
 
 def _aws(args: list[str]) -> tuple[int, str, str]:
@@ -264,6 +266,19 @@ def get_stack_outputs(stack_name: str, region: str) -> dict:
     return _cfn_stack_outputs(stack_name, region)
 
 
+def get_stack_id(stack_name: str, region: str) -> str:
+    """Return the stack's physical ID (ARN), or "" if not found."""
+    code, data = _aws_json([
+        "cloudformation", "describe-stacks",
+        "--stack-name", stack_name, "--region", region,
+    ])
+    if code == 0 and data:
+        stacks = data.get("Stacks", [])
+        if stacks:
+            return stacks[0].get("StackId", "")
+    return ""
+
+
 def is_in_progress(status: Optional[str]) -> bool:
     return bool(status) and status.endswith("_IN_PROGRESS") and status != "REVIEW_IN_PROGRESS"
 
@@ -311,9 +326,13 @@ def deploy_stack(
     on_event: Callable[[StackEvent], None] | None = None,
     poll_interval: int = 15,
     on_failure: Optional[str] = None,
+    wait: bool = True,
+    on_submit: Callable[[str], None] | None = None,
 ) -> DeployResult:
     """
-    Deploy a CloudFormation stack and stream events until it reaches a terminal state.
+    Submit a CloudFormation stack. When wait=True, stream events until it reaches a
+    terminal state; when wait=False, return as soon as it is submitted (hand-off).
+    on_submit(stack_id) is invoked right after submission (e.g. to print console links).
     """
     param_list = [
         f"ParameterKey={k},ParameterValue={v}"
@@ -339,11 +358,40 @@ def deploy_stack(
     if on_failure:
         create_args += ["--on-failure", on_failure]
 
-    code, _, err = _aws(create_args)
+    code, out, err = _aws(create_args)
     if code != 0:
         return DeployResult(stack_name=stack_name, success=False, error=err)
 
-    # Poll until terminal state
+    stack_id = ""
+    if out:
+        try:
+            stack_id = json.loads(out).get("StackId", "")
+        except json.JSONDecodeError:
+            pass
+
+    if on_submit:
+        on_submit(stack_id)
+
+    if not wait:
+        return DeployResult(stack_name=stack_name, success=True, stack_id=stack_id, pending=True)
+
+    return wait_for_stack(stack_name, region, on_event=on_event,
+                          poll_interval=poll_interval, stack_id=stack_id)
+
+
+def wait_for_stack(
+    stack_name: str,
+    region: str,
+    on_event: Callable[[StackEvent], None] | None = None,
+    poll_interval: int = 15,
+    stack_id: str = "",
+) -> DeployResult:
+    """Stream a stack's events until it reaches a terminal state.
+
+    Tolerates transient describe failures (status None -> keep waiting), matching the
+    original create-and-wait behavior. Callers that watch a possibly-nonexistent stack
+    should check get_stack_status() first.
+    """
     last_ts: Optional[str] = None
     while True:
         status = _cfn_stack_status(stack_name, region)
@@ -362,6 +410,7 @@ def deploy_stack(
                 success=success,
                 outputs=outputs,
                 error=error,
+                stack_id=stack_id,
             )
 
         time.sleep(poll_interval)
