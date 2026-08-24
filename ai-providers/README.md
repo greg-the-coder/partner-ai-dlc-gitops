@@ -82,3 +82,40 @@ terraform apply
 `infrastructure/coder_deployment.yaml` invokes `ai_providers_gitops.sh` in the
 CodeBuild deploy step (after creating the Bedrock Mantle service credential),
 in place of the previous `curl` provider/model calls.
+
+## Coder Agents MCP servers (`ai_mcp_servers_gitops.sh`)
+
+Coder Agents can be given external **MCP servers** (AI Settings > Coder Agents >
+MCP servers, `/ai/settings/mcp-servers`). Unlike providers/models, the `coderd`
+Terraform provider (0.0.23) has **no resource** for these, so registration is a
+direct, idempotent admin-API call — mirroring how the AI providers were wired
+*before* the Terraform resources existed:
+
+```
+POST /api/v2/organizations/{org}/mcp-servers   (CreateMCPServerConfigRequest)
+```
+
+`ai_mcp_servers_gitops.sh <session-token>` registers the **AWS Knowledge MCP
+Server** — a remote, AWS-hosted, no-install/no-credentials server exposing AWS
+docs, API references, What's New, Builder Center, and Well-Architected guidance
+(ideal for Citizen Developers/Builders):
+
+| Field | Value |
+|---|---|
+| `display_name` | `AWS Knowledge` |
+| `slug` | `aws-knowledge` (override via `MCP_KNOWLEDGE_SLUG`) |
+| `transport` | `streamable_http` |
+| `url` | `https://knowledge-mcp.global.api.aws` (override via `MCP_KNOWLEDGE_URL`) |
+| `auth_type` | `none` |
+| `availability` | `default_on` (override via `MCP_KNOWLEDGE_AVAIL`) |
+| `model_intent` | `true` (surfaces each tool call's purpose in Coder AI Session logs) |
+
+The script is **best-effort and always exits 0**: it no-ops (HTTP 404) on Coder
+versions without the MCP-servers API and never fails a deploy. The buildspec
+invokes it right after `ai_providers_gitops.sh` (guarded with `|| true`).
+
+> **Requires Coder 2.36+ with the AI Governance Add-On.** The MCP-servers API
+> does not exist on earlier versions (the script detects this and skips).
+> This differs from the workspace-level MCP servers in the templates (Kiro /
+> Claude Code `mcp.json`): those are per-workspace tools for the CLI assistants,
+> whereas this registers a server for the server-side **Coder Agents** chat.
