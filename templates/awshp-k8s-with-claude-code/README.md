@@ -1,10 +1,10 @@
 ---
 display_name: AWS Workshop - Kubernetes with Claude Code
-description: Fargate workspace with the Claude Code AI assistant and task automation, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
+description: Fargate Claude Code workspace routed through the Coder AI Gateway, with AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
-tags: [kubernetes, fargate, ai, claude, claude-code, bedrock, task-automation]
+tags: [kubernetes, fargate, ai, claude, claude-code, coder-ai-gateway, bedrock]
 ---
 
 # Kubernetes with Claude Code
@@ -16,28 +16,33 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 ## Capabilities
 
 ### AI assistant
-- **Claude Code** CLI (`@anthropic-ai/claude-code`) with **task automation** and task
-  reporting back to Coder (`report_tasks = true`)
-- **Coder AI Gateway** routing — Claude Code's model requests go through the Coder AI
-  Gateway (`ANTHROPIC_BASE_URL = <access_url>/api/v2/aibridge/anthropic`), authenticated
-  with the user's Coder session token (`enable_aibridge = true`). The gateway forwards to
-  the admin-configured Amazon Bedrock provider (default **Claude Opus 4.6**,
-  `global.anthropic.claude-opus-4-6-v1`) using the control plane's centrally-held
-  credentials — no AWS keys or `CLAUDE_CODE_USE_BEDROCK` in the workspace — so all usage is
-  centrally governed and observable.
-  > Requires Coder v2.32+ with the **AI Governance Add-On** enabled on the deployment.
-- **MCP** (Model Context Protocol) — the
-  [AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS
-  documentation, CDK, AWS diagram, and Terraform) are added to Claude Code at
-  user scope and run on demand via `uvx`.
+- **Claude Code** CLI (`@anthropic-ai/claude-code`), opened from the **Claude Code** app
+  tile (a launcher `coder_app`) or the web terminal. Coder Tasks integration was dropped in
+  the Coder 2.36.0 upgrade (and by claude-code module v5), so Claude Code runs as an
+  interactive CLI rather than a Tasks web app.
+- **Coder AI Gateway** routing — Claude Code *and* the notebook SDKs send every model
+  request through the **Coder AI Gateway**
+  (`ANTHROPIC_BASE_URL = <access_url>/api/v2/aibridge/anthropic`), authenticated with the
+  user's Coder session token. The gateway forwards to the admin-configured Amazon Bedrock
+  provider (default **Claude Opus 4.6**, `global.anthropic.claude-opus-4-6-v1`) using the
+  control plane's centrally-held credentials — no AWS keys or `CLAUDE_CODE_USE_BEDROCK` in
+  the workspace — so all usage is governed and observable by the **Coder AI Governance
+  Add-On** (prompts, spend, and tool calls appear in Coder AI Session logs).
+  > Requires Coder v2.32+ with the Coder AI Governance Add-On enabled on the deployment.
+- **MCP** (Model Context Protocol) — a citizen-builder set of
+  [AWS Labs MCP servers](https://github.com/awslabs/mcp) is added to Claude Code at user
+  scope and run on demand via `uvx`: AWS **documentation**, **IaC** (CloudFormation + CDK),
+  **pricing**, **API** (`call_aws`), **Serverless**, and **CloudWatch** — covering the
+  learn → design → cost → build/deploy → operate lifecycle. Calls use the workspace IAM role.
 
 ### Notebooks & agent SDKs (Coder AI Gateway)
-The workspace also points the Python agent SDKs at the Coder AI Gateway so notebook
-LLM calls are governed centrally. The agent kernel (`Python (Agents)`) inherits:
+The template points the Python agent SDKs at the **Coder AI Gateway** (via agent-wide
+`coder_env`) so notebook LLM calls are governed by the **Coder AI Governance Add-On** too.
+The agent kernel (`Python (Agents)`) inherits:
 
-- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/aibridge/anthropic` (set by Claude Code)
-- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` → the user's Coder session token
+- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/aibridge/anthropic`
 - `OPENAI_BASE_URL` → `<access_url>/api/v2/aibridge/openai/v1`
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` → the user's Coder session token
 
 So Anthropic- and OpenAI-protocol clients route through the gateway with no extra
 config:

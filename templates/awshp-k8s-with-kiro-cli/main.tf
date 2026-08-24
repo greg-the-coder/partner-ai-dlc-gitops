@@ -40,35 +40,43 @@ variable "efs_file_system_id" {
 locals {
   home_dir = "/home/coder"
 
-  # AWS MCP servers wired into Kiro CLI (mcp.json). All run over stdio via `uvx`
-  # (pinned @latest) with quiet logging, giving the workshop agents first-class
-  # AWS documentation, CDK, Terraform, and diagram tooling out of the box.
+  # AWS Labs MCP servers wired into Kiro CLI (mcp.json), all over stdio via `uvx`
+  # (pinned @latest, quiet logging). A citizen-builder toolkit spanning the AWS
+  # solution lifecycle: learn (documentation), design & validate IaC (iac),
+  # estimate cost (pricing), then build & operate the account (aws-api,
+  # serverless, cloudwatch). All calls use the workspace IAM role
+  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
   # See https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
-    "awslabs.core-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.core-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
-    }
     "awslabs.aws-documentation-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-documentation-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
     }
-    "awslabs.cdk-mcp-server" = {
+    "awslabs.aws-iac-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.cdk-mcp-server@latest"]
+      args    = ["awslabs.aws-iac-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR" }
     }
-    "awslabs.aws-diagram-mcp-server" = {
+    "awslabs.aws-pricing-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-diagram-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+      args    = ["awslabs.aws-pricing-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.terraform-mcp-server" = {
+    "awslabs.aws-api-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.terraform-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+      args    = ["awslabs.aws-api-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+    }
+    "awslabs.aws-serverless-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.aws-serverless-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+    }
+    "awslabs.cloudwatch-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.cloudwatch-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
@@ -210,14 +218,7 @@ resource "coder_agent" "dev" {
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
     fi
 
-    # The AWS diagram MCP server renders via graphviz's `dot`; install it once if
-    # missing so diagram generation works (best-effort, non-fatal).
-    if ! command -v dot >/dev/null 2>&1; then
-      sudo apt-get update -qq || true
-      sudo apt-get install -y graphviz >/dev/null 2>&1 || true
-    fi
-
-    # Configure Kiro CLI MCP servers (AWS: core, docs, CDK, diagram, terraform)
+    # Configure Kiro CLI MCP servers (AWS documentation + IaC)
     echo "Configuring Kiro CLI MCP servers..."
 
     # Create user-level MCP configuration
@@ -275,7 +276,7 @@ TRUST_EOF
 
 module "coder-login" {
   source   = "registry.coder.com/coder/coder-login/coder"
-  version  = "1.1.0"
+  version  = "1.1.1"
   agent_id = coder_agent.dev.id
 }
 
@@ -331,7 +332,7 @@ resource "coder_script" "agent_python_kernel" {
 
 module "code-server" {
   source     = "registry.coder.com/coder/code-server/coder"
-  version    = "1.3.1"
+  version    = "1.5.2"
   agent_id   = coder_agent.dev.id
   folder     = local.home_folder
   subdomain  = false
@@ -341,7 +342,7 @@ module "code-server" {
 
 module "kiro" {
   source   = "registry.coder.com/coder/kiro/coder"
-  version  = "1.1.0"
+  version  = "1.2.1"
   agent_id = coder_agent.dev.id
   order    = 1
 }
