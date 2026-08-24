@@ -29,10 +29,11 @@ persisted on **Amazon EFS** so work survives workspace restarts.
   the workspace — so all usage is governed and observable by the **Coder AI Governance
   Add-On** (prompts, spend, and tool calls appear in Coder AI Session logs).
   > Requires Coder v2.32+ with the Coder AI Governance Add-On enabled on the deployment.
-- **MCP** (Model Context Protocol) — the
-  [AWS Labs MCP servers](https://github.com/awslabs/mcp) (AWS documentation, and AWS
-  IaC — CloudFormation + CDK) are added to Claude Code at user scope and run on
-  demand via `uvx`.
+- **MCP** (Model Context Protocol) — a citizen-builder set of
+  [AWS Labs MCP servers](https://github.com/awslabs/mcp) is added to Claude Code at user
+  scope and run on demand via `uvx`: AWS **documentation**, **IaC** (CloudFormation + CDK),
+  **pricing**, **API** (`call_aws`), **Serverless**, and **CloudWatch** — covering the
+  learn → design → cost → build/deploy → operate lifecycle. Calls use the workspace IAM role.
 
 ### Notebooks & agent SDKs (Coder AI Gateway)
 The template points the Python agent SDKs at the **Coder AI Gateway** (via agent-wide

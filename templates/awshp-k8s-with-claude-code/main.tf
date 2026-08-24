@@ -48,9 +48,12 @@ locals {
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   cost     = 2
 
-  # AWS MCP servers added to Claude Code at user scope. All run over stdio via
-  # `uvx` (pinned @latest) with quiet logging, giving the workshop agents
-  # first-class AWS documentation search and IaC (CloudFormation + CDK) tooling.
+  # AWS Labs MCP servers added to Claude Code at user scope, all over stdio via
+  # `uvx` (pinned @latest, quiet logging). A citizen-builder toolkit spanning the
+  # AWS solution lifecycle: learn (documentation), design & validate IaC (iac),
+  # estimate cost (pricing), then build & operate the account (aws-api,
+  # serverless, cloudwatch). All calls use the workspace IAM role
+  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
   # See https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
     "awslabs.aws-documentation-mcp-server" = {
@@ -62,6 +65,26 @@ locals {
       command = "uvx"
       args    = ["awslabs.aws-iac-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+    }
+    "awslabs.aws-pricing-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.aws-pricing-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+    }
+    "awslabs.aws-api-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.aws-api-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+    }
+    "awslabs.aws-serverless-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.aws-serverless-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+    }
+    "awslabs.cloudwatch-mcp-server" = {
+      command = "uvx"
+      args    = ["awslabs.cloudwatch-mcp-server@latest"]
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })

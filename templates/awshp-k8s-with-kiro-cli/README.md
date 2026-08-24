@@ -19,8 +19,10 @@ A serverless Coder workspace running on **AWS Fargate** with the
 - **Kiro CLI** (`kiro-cli`, `kiro-cli-chat`) for interactive, command-line AI development
 - **Kiro IDE** web app
 - **MCP** (Model Context Protocol) support — pre-seeded `~/.kiro/settings/mcp.json`
-  with the [AWS Labs MCP servers](https://github.com/awslabs/mcp): AWS documentation
-  and AWS IaC (CloudFormation + CDK) validation/best-practices, run on demand via `uvx`.
+  with a citizen-builder set of [AWS Labs MCP servers](https://github.com/awslabs/mcp),
+  run on demand via `uvx`: AWS **documentation**, **IaC** (CloudFormation + CDK),
+  **pricing**, **API** (`call_aws`), **Serverless**, and **CloudWatch** — covering the
+  learn → design → cost → build/deploy → operate lifecycle. Calls use the workspace IAM role.
 - **KiroCrew** (optional) — multi-agent Kiro orchestration gateway + dashboard,
   enabled with the **Enable KiroCrew** parameter (see below).
 - **Amazon Bedrock** access via the workspace IAM role
