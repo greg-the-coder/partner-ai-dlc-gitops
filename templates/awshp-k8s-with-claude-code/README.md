@@ -22,7 +22,7 @@ persisted on **Amazon EFS** so work survives workspace restarts.
   interactive CLI rather than a Tasks web app.
 - **Coder AI Gateway** routing — Claude Code *and* the notebook SDKs send every model
   request through the **Coder AI Gateway**
-  (`ANTHROPIC_BASE_URL = <access_url>/api/v2/aibridge/anthropic`), authenticated with the
+  (`ANTHROPIC_BASE_URL = <access_url>/api/v2/ai-gateway/anthropic`), authenticated with the
   user's Coder session token. The gateway forwards to the admin-configured Amazon Bedrock
   provider (default **Claude Opus 4.6**, `global.anthropic.claude-opus-4-6-v1`) using the
   control plane's centrally-held credentials — no AWS keys or `CLAUDE_CODE_USE_BEDROCK` in
@@ -40,8 +40,8 @@ The template points the Python agent SDKs at the **Coder AI Gateway** (via agent
 `coder_env`) so notebook LLM calls are governed by the **Coder AI Governance Add-On** too.
 The agent kernel (`Python (Agents)`) inherits:
 
-- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/aibridge/anthropic`
-- `OPENAI_BASE_URL` → `<access_url>/api/v2/aibridge/openai/v1`
+- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/ai-gateway/anthropic`
+- `OPENAI_BASE_URL` → `<access_url>/api/v2/ai-gateway/openai/v1`
 - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` → the user's Coder session token
 
 So Anthropic- and OpenAI-protocol clients route through the gateway with no extra
