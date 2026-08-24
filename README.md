@@ -171,8 +171,8 @@ All templates support both compute lanes (Fargate default, EC2 Spot optional) vi
 **Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
 
 The **Claude Code** and **Kiro CLI** templates ship the
-[AWS Labs MCP servers](https://github.com/awslabs/mcp) (core, AWS documentation, CDK, AWS
-diagram, and Terraform) preconfigured for their assistants, running on demand via `uvx`.
+[AWS Labs MCP servers](https://github.com/awslabs/mcp) (AWS documentation, and AWS IaC —
+CloudFormation + CDK) preconfigured for their assistants, running on demand via `uvx`.
 The **Kiro CLI** template additionally offers an optional **KiroCrew** multi-agent
 orchestration gateway + dashboard, toggled with its **Enable KiroCrew** parameter.
 

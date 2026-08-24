@@ -50,32 +50,17 @@ locals {
 
   # AWS MCP servers added to Claude Code at user scope. All run over stdio via
   # `uvx` (pinned @latest) with quiet logging, giving the workshop agents
-  # first-class AWS documentation, CDK, Terraform, and diagram tooling out of the
-  # box. See https://github.com/awslabs/mcp for each server's capabilities.
+  # first-class AWS documentation search and IaC (CloudFormation + CDK) tooling.
+  # See https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
-    "awslabs.core-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.core-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
-    }
     "awslabs.aws-documentation-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-documentation-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
     }
-    "awslabs.cdk-mcp-server" = {
+    "awslabs.aws-iac-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.cdk-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
-    }
-    "awslabs.aws-diagram-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.aws-diagram-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
-    }
-    "awslabs.terraform-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.terraform-mcp-server@latest"]
+      args    = ["awslabs.aws-iac-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR" }
     }
   }
@@ -393,13 +378,6 @@ module "claude-code" {
     if ! command -v uvx >/dev/null 2>&1; then
       export UV_UNMANAGED_INSTALL="$HOME/.local/bin"
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
-    fi
-
-    # The AWS diagram MCP server renders via graphviz's `dot`; install it once if
-    # missing so diagram generation works (best-effort, non-fatal).
-    if ! command -v dot >/dev/null 2>&1; then
-      sudo apt-get update -qq || true
-      sudo apt-get install -y graphviz >/dev/null 2>&1 || true
     fi
 
     #Symlink Coder Agent
