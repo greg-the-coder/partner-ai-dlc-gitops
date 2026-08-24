@@ -177,7 +177,7 @@ resource "coder_env" "path" {
 resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
   name     = "ANTHROPIC_BASE_URL"
-  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/anthropic"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/aibridge/anthropic"
 }
 
 resource "coder_env" "anthropic_api_key" {
@@ -189,7 +189,7 @@ resource "coder_env" "anthropic_api_key" {
 resource "coder_env" "openai_base_url" {
   agent_id = coder_agent.dev.id
   name     = "OPENAI_BASE_URL"
-  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/openai/v1"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/aibridge/openai/v1"
 }
 
 resource "coder_env" "openai_api_key" {
@@ -236,6 +236,15 @@ resource "coder_agent" "dev" {
   }
   startup_script = <<-EOT
     set -e
+
+    # Ensure the `coder` CLI is on PATH for every coder_script/module that needs
+    # it (notably coder-login). This template pins a fixed agent PATH
+    # (coder_env.path), which drops the agent's own coder binary directory, so
+    # symlink coder into the script bin dir (the agent prepends it to PATH) here
+    # in the startup script — before the module scripts run. Mirrors the
+    # kiro-cli / challenge templates. Without this the coder-login script fails
+    # with "coder: command not found" and the agent reports a startup error.
+    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
 
     EOT
 
