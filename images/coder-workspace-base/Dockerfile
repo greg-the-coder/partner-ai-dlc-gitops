@@ -89,6 +89,27 @@ RUN chmod 777 /usr/local/bin
 # Install a no-op sudo wrapper (Coder modules expect sudo to exist for `sudo mv`)
 RUN printf '#!/bin/sh\nexec "$@"\n' > /usr/bin/sudo && chmod +x /usr/bin/sudo
 
+# Install a `coder` CLI shim on PATH so the agent CLI is ALWAYS resolvable for
+# coder_scripts from container start. The agent extracts its real binary to
+# /tmp/coder.<random>/coder before running scripts, but templates that pin a
+# fixed agent PATH (coder_env.path) drop that directory from the coder_script
+# PATH. Module install pipelines (coder-utils) call `coder exp sync` on the
+# FIRST line of each wrapped script, so if `coder` isn't on PATH yet they exit
+# 127 and the agent reports a start_error. A startup/pre_install symlink can't
+# win that race reliably because those scripts run concurrently. This shim lives
+# on the image PATH (/usr/local/bin, see ENV PATH below) from t=0 and execs the
+# real runtime binary, eliminating the race for every template and workspace.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    '# Coder agent CLI shim -- exec the agent runtime binary (see Dockerfile).' \
+    'for c in /tmp/coder.*/coder /tmp/coder-script-data/bin/coder; do' \
+    '  [ -x "$c" ] && exec "$c" "$@"' \
+    'done' \
+    'echo "coder: agent CLI binary not found under /tmp/coder.*/coder" >&2' \
+    'exit 127' \
+    > /usr/local/bin/coder \
+    && chmod 755 /usr/local/bin/coder
+
 USER coder
 WORKDIR /home/coder
 
