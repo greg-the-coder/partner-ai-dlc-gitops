@@ -48,13 +48,21 @@ locals {
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   cost     = 2
 
+  # Deployment region for AWS API calls the MCP servers make via the workspace
+  # IAM role. Derived from the ECR registry region embedded in workspace_image
+  # (e.g. <acct>.dkr.ecr.us-east-2.amazonaws.com/...) so it always tracks the
+  # deployment without a separate variable; falls back to us-east-1 for
+  # non-ECR images (e.g. the codercom/enterprise-base default).
+  aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
+
   # AWS Labs MCP servers added to Claude Code at user scope, all over stdio via
   # `uvx` (pinned @latest, quiet logging). A citizen-builder toolkit spanning the
   # AWS solution lifecycle: learn (documentation), design & validate IaC (iac),
-  # estimate cost (pricing), then build & operate the account (aws-api,
-  # serverless, cloudwatch). All calls use the workspace IAM role
-  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
-  # See https://github.com/awslabs/mcp for each server's capabilities.
+  # estimate cost (pricing), then build & operate the account (serverless,
+  # cloudwatch). All calls use the workspace IAM role
+  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region
+  # (local.aws_region, derived from the ECR image URI). See
+  # https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
     "awslabs-aws-documentation-mcp-server" = {
       command = "uvx"
@@ -69,22 +77,17 @@ locals {
     "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-pricing-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
-    }
-    "awslabs-aws-api-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.aws-api-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
     "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-serverless-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
     "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.cloudwatch-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
@@ -455,6 +458,74 @@ module "claude-code" {
 
     EOF
 
+}
+
+# Reconcile ~/.claude.json to match this template on every start. Needed because
+# ~/.claude.json lives on EFS-persisted home and the claude-code module only
+# ADDS MCP servers (`claude mcp add-json`) — it never removes servers dropped
+# from the template nor updates the env (e.g. AWS_REGION) of ones that already
+# exist. So on a rebuilt workspace, stale/renamed servers and old regions would
+# linger. This script (1) makes the managed awslabs-* MCP set authoritative and
+# (2) pre-approves the current ANTHROPIC_API_KEY so users are never shown Claude
+# Code's "Detected a custom API key ... Do you want to use this API key?" prompt
+# (Claude stores the LAST 20 CHARACTERS in customApiKeyResponses.approved; the
+# Coder session token rotates each start, hence run_on_start).
+#
+# This is a STANDALONE coder_script (NOT the module's post_install, whose
+# coder-utils wrapper shells out to `coder exp sync` and would race to exit 127
+# under this template's pinned coder_env.path). It waits for the module install
+# to finish writing ~/.claude.json (hasCompletedOnboarding=true is written near
+# the end of install) so our writes are not clobbered.
+resource "coder_script" "claude_config_reconcile" {
+  count        = data.coder_workspace.me.start_count
+  agent_id     = coder_agent.dev.id
+  display_name = "Claude Code: reconcile config"
+  icon         = "/icon/claude.svg"
+  run_on_start = true
+  script       = <<-EOT
+    #!/usr/bin/env bash
+    set -u
+    CFG="$HOME/.claude.json"
+    DESIRED_MCP='${jsonencode(local.mcp_servers)}'
+
+    # Wait up to ~120s for the module install to settle ~/.claude.json.
+    for _ in $(seq 1 60); do
+      if [ -f "$CFG" ] && jq -e '.hasCompletedOnboarding == true' "$CFG" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+    sleep 5   # let install's final trust-dialog write land
+    [ -f "$CFG" ] || echo '{}' > "$CFG"
+
+    # (1) Authoritative managed MCP set: drop existing awslabs-* entries (prunes
+    # removed/renamed servers and stale env such as an old AWS_REGION), then
+    # merge in this template's set. Non-managed (user-added) servers are kept.
+    tmp=$(mktemp)
+    if jq --argjson desired "$DESIRED_MCP" '
+          .mcpServers = ((.mcpServers // {}) | with_entries(select(.key | startswith("awslabs-") | not))) + $desired
+        ' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
+      echo "Reconciled managed MCP servers in $CFG."
+    else
+      rm -f "$tmp"; echo "Warning: could not reconcile MCP servers in $CFG."
+    fi
+
+    # (2) Pre-approve the current ANTHROPIC_API_KEY so Claude Code never prompts.
+    KEY="$${ANTHROPIC_API_KEY:-}"
+    if [ -n "$KEY" ]; then
+      SUFFIX=$(printf %s "$KEY" | tail -c 20)
+      tmp=$(mktemp)
+      if jq --arg k "$SUFFIX" '
+            .customApiKeyResponses = (.customApiKeyResponses // {"approved": [], "rejected": []})
+            | .customApiKeyResponses.approved = (((.customApiKeyResponses.approved // []) + [$k]) | unique)
+            | .customApiKeyResponses.rejected = ((.customApiKeyResponses.rejected // []) - [$k])
+          ' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
+        echo "Pre-approved ANTHROPIC_API_KEY in $CFG (Claude Code will not prompt)."
+      else
+        rm -f "$tmp"; echo "Warning: could not pre-approve ANTHROPIC_API_KEY."
+      fi
+    fi
+  EOT
 }
 
 # Clickable Claude Code launcher. claude-code v5 no longer ships a web app, so

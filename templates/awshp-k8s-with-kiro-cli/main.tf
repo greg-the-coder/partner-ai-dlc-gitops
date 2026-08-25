@@ -40,13 +40,21 @@ variable "efs_file_system_id" {
 locals {
   home_dir = "/home/coder"
 
+  # Deployment region for AWS API calls the MCP servers make via the workspace
+  # IAM role. Derived from the ECR registry region embedded in workspace_image
+  # (e.g. <acct>.dkr.ecr.us-east-2.amazonaws.com/...) so it always tracks the
+  # deployment without a separate variable; falls back to us-east-1 for
+  # non-ECR images (e.g. the codercom/enterprise-base default).
+  aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
+
   # AWS Labs MCP servers wired into Kiro CLI (mcp.json), all over stdio via `uvx`
   # (pinned @latest, quiet logging). A citizen-builder toolkit spanning the AWS
   # solution lifecycle: learn (documentation), design & validate IaC (iac),
-  # estimate cost (pricing), then build & operate the account (aws-api,
-  # serverless, cloudwatch). All calls use the workspace IAM role
-  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
-  # See https://github.com/awslabs/mcp for each server's capabilities.
+  # estimate cost (pricing), then build & operate the account (serverless,
+  # cloudwatch). All calls use the workspace IAM role
+  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region
+  # (local.aws_region, derived from the ECR image URI). See
+  # https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
     "awslabs-aws-documentation-mcp-server" = {
       command = "uvx"
@@ -61,22 +69,17 @@ locals {
     "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-pricing-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
-    }
-    "awslabs-aws-api-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.aws-api-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
     "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-serverless-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
     "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.cloudwatch-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
