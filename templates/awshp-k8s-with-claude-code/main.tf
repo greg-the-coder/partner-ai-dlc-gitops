@@ -225,6 +225,25 @@ resource "coder_env" "openai_api_key" {
   value    = data.coder_workspace_owner.me.session_token
 }
 
+# Claude Code's MCP client aborts a server that isn't ready within MCP_TIMEOUT ms
+# (default 30000). The awslabs / mcp-proxy-for-aws servers run via `uvx`, whose
+# FIRST invocation downloads & builds the package (tens of seconds to a couple
+# minutes on a cold workspace) before the server can speak MCP, so the default
+# 30s probe reports "connection timed out after 30000ms". Raise the startup and
+# tool timeouts so cold-start servers connect on the first `claude mcp list` /
+# tool call instead of failing (the reconcile script also pre-warms them).
+resource "coder_env" "mcp_timeout" {
+  agent_id = coder_agent.dev.id
+  name     = "MCP_TIMEOUT"
+  value    = "180000"
+}
+
+resource "coder_env" "mcp_tool_timeout" {
+  agent_id = coder_agent.dev.id
+  name     = "MCP_TOOL_TIMEOUT"
+  value    = "180000"
+}
+
 resource "coder_agent" "dev" {
   arch = "amd64"
   os   = "linux"
@@ -543,13 +562,24 @@ resource "coder_script" "claude_config_reconcile" {
       fi
     fi
 
-    # (3) Warm the AWS MCP Server proxy's uv cache now that install has finished
+    # (3) Warm the uv cache for EVERY MCP server now that install has finished
     # (this runs AFTER the module's coder-utils scripts, so it does not contend
-    # with their startup `coder exp sync` calls). The first `uvx` run installs
-    # ~77 packages / can take ~20-30s; warming here means the first
-    # `claude mcp list` probe and first real call_aws find aws-mcp responsive
-    # instead of timing out cold. Non-fatal.
-    uvx mcp-proxy-for-aws@1.6.4 --help >/dev/null 2>&1 || true
+    # with their startup `coder exp sync` calls). Each server runs via `uvx`,
+    # whose first invocation downloads & builds the package (tens of seconds)
+    # before it can speak MCP; without warming, the awslabs servers cold-start
+    # and Claude's health probe reports "connection timed out after 30000ms".
+    # Warm the exact packages from DESIRED_MCP in PARALLEL. IMPORTANT: build the
+    # package list FIRST, then background the jobs in THIS shell (not inside a
+    # `jq | while` pipeline subshell) so `wait` actually reaps them -- otherwise
+    # the orphaned uvx children keep the script's log pipe open and the agent
+    # kills the script (exit 255). Warming is best-effort; never fail the script.
+    PKGS=$(echo "$DESIRED_MCP" | jq -r '.[] | select(.command == "uvx") | .args[0]')
+    for pkg in $PKGS; do
+      [ -n "$pkg" ] && timeout 180 uvx "$pkg" --help >/dev/null 2>&1 &
+    done
+    wait
+    echo "Warmed uv cache for all uvx MCP servers."
+    exit 0
   EOT
 }
 
