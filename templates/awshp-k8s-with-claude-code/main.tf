@@ -244,14 +244,35 @@ resource "coder_agent" "dev" {
   startup_script = <<-EOT
     set -e
 
-    # Ensure the `coder` CLI is on PATH for every coder_script/module that needs
-    # it (notably coder-login). This template pins a fixed agent PATH
-    # (coder_env.path), which drops the agent's own coder binary directory, so
-    # symlink coder into the script bin dir (the agent prepends it to PATH) here
-    # in the startup script — before the module scripts run. Mirrors the
-    # kiro-cli / challenge templates. Without this the coder-login script fails
-    # with "coder: command not found" and the agent reports a startup error.
+    # Ensure the `coder` CLI is resolvable for interactive login shells and any
+    # coder_script that shells out to it. This template pins a fixed agent PATH
+    # (coder_env.path / local.bin_path); coder_scripts run with THAT PATH, which
+    # drops the agent's own coder binary dir, so we symlink coder into
+    # $HOME/.local/bin (the first entry of local.bin_path) and mirror it into
+    # $CODER_SCRIPT_BIN_DIR. NOTE: this startup script and the claude-code
+    # module's install pipeline are launched CONCURRENTLY by the agent, so this
+    # symlink is best-effort for scripts (it can lose the startup race). Scripts
+    # that MUST call coder at their very first line (e.g. coder-utils' `coder exp
+    # sync` wrapper) cannot rely on it — which is exactly why the Claude Code
+    # bypass-permissions setup below lives HERE, in a raw startup script that
+    # needs no coder, rather than in the module's post_install_script (whose
+    # wrapper calls `coder exp sync` before its body runs and races to exit 127,
+    # surfacing as an agent start_error).
+    mkdir -p /home/coder/.local/bin
+    ln -sf /tmp/coder.*/coder /home/coder/.local/bin/coder 2>/dev/null || true
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
+
+    # Claude Code v5 dropped the dangerously_skip_permissions input; set bypass
+    # mode at user scope instead (equivalent to --dangerously-skip-permissions)
+    # and skip the dangerous-mode TOS prompt. User-scope settings.json is
+    # writable by the uid-1000 pod; managed-settings under /etc/claude-code would
+    # require root. This only writes ~/.claude/settings.json (never calls coder),
+    # and targets a different file than the module install script's ~/.claude.json,
+    # so it is safe to run concurrently with the module.
+    mkdir -p "$HOME/.claude"
+    SETTINGS="$HOME/.claude/settings.json"
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
 
     EOT
 
@@ -396,10 +417,15 @@ module "claude-code" {
   # Gateway is wired via the agent-wide coder_env above (a single X-Api-Key that
   # both Claude Code and the notebook SDKs honor), NOT the module's
   # enable_ai_gateway (whose ANTHROPIC_AUTH_TOKEN langchain-anthropic can't read).
-  # Permission bypass is set at user scope in post_install_script (managed_settings
-  # would target root-owned /etc/claude-code, which these uid-1000 pods can't
-  # write). A clickable Claude Code launcher is provided by coder_app.claude_code
-  # below (the module no longer ships one).
+  # Permission bypass is set at user scope in the agent startup_script above
+  # (managed_settings would target root-owned /etc/claude-code, which these
+  # uid-1000 pods can't write). We deliberately do NOT use the module's
+  # post_install_script: coder-utils wraps it with a `coder exp sync` call that
+  # runs before the script body, and because this template pins coder_env.path
+  # (dropping coder from the coder_script PATH) that wrapper races the startup
+  # symlink and exits 127, surfacing as an agent start_error. A clickable Claude
+  # Code launcher is provided by coder_app.claude_code below (the module no
+  # longer ships one).
 
   pre_install_script = <<-EOF
     set -e
@@ -419,23 +445,16 @@ module "claude-code" {
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
     fi
 
-    #Symlink Coder Agent
+    # Symlink the Coder agent CLI onto PATH. $HOME/.local/bin is the first entry
+    # in the template's fixed coder_env.path (local.bin_path). This is
+    # belt-and-suspenders so `coder` is resolvable for interactive login shells
+    # and for later module scripts once this pre_install step has run (the agent
+    # only injects $CODER_SCRIPT_BIN_DIR into login shells, not coder_scripts).
+    ln -sf /tmp/coder.*/coder "$HOME/.local/bin/coder"
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
 
     EOF
 
-  post_install_script = <<-EOF
-
-# claude-code v5 dropped the dangerously_skip_permissions input; set bypass mode at
-# user scope instead (equivalent to --dangerously-skip-permissions) and skip the
-# dangerous-mode TOS prompt. User-scope settings are writable by the uid-1000 pod;
-# managed-settings under /etc/claude-code would require root.
-mkdir -p "$HOME/.claude"
-SETTINGS="$HOME/.claude/settings.json"
-[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
-
-EOF
 }
 
 # Clickable Claude Code launcher. claude-code v5 no longer ships a web app, so
