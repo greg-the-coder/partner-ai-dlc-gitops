@@ -186,6 +186,31 @@ mkdir -p "$HOME/.kiro/crew"
 cat > "$LAUNCHER_PATH" <<'LAUNCHER'
 #!/usr/bin/env bash
 [ -f "$HOME/.kiro/.aws-builder-id-env" ] && source "$HOME/.kiro/.aws-builder-id-env"
+
+# Wait for kiro-cli authentication BEFORE starting the gateway. On start the
+# gateway fills a warm pool of `kiro-cli acp` runtimes; if kiro-cli is not logged
+# in yet, every spawn fails with AcpAuthRequired and the pool stays empty until a
+# manual restart. Interactive Builder ID / SSO login can only complete AFTER the
+# workspace boots, so we poll here in the detached launcher (safe: the parent
+# coder_script has already returned, so the agent won't SIGTERM us for waiting).
+# Headless KIRO_API_KEY auth authenticates at spawn time and needs no wait. The
+# wait is bounded (~30 min) so the gateway still comes up even if nobody logs in
+# (it then recovers once a user logs in and opens a session).
+KIRO_CLI="$(command -v kiro-cli 2>/dev/null || echo /usr/local/bin/kiro-cli)"
+if [ -z "$${KIRO_API_KEY:-}" ] && [ -x "$KIRO_CLI" ]; then
+  echo "KiroCrew: waiting for 'kiro-cli login' before starting the gateway (warm pool needs auth)..."
+  waited=0
+  while ! timeout 15 "$KIRO_CLI" whoami >/dev/null 2>&1; do
+    if [ "$waited" -ge 1800 ]; then
+      echo "KiroCrew: kiro-cli still not logged in after $${waited}s; starting gateway anyway (it will recover once you log in and open a session)."
+      break
+    fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+  timeout 15 "$KIRO_CLI" whoami >/dev/null 2>&1 && echo "KiroCrew: kiro-cli authenticated after $${waited}s; starting gateway."
+fi
+
 # Trust the Coder proxy host(s) in the gateway's Host/Origin allowlist so the
 # dashboard is reachable through Coder ("Host header not allowed." otherwise).
 [ -n "$KC_ORIGINS" ] && export KIROCREW_CORS_ORIGINS="$KC_ORIGINS"
