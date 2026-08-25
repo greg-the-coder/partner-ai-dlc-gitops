@@ -124,7 +124,7 @@ resource "coder_env" "path" {
 resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
   name     = "ANTHROPIC_BASE_URL"
-  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/anthropic"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/anthropic"
 }
 
 resource "coder_env" "anthropic_api_key" {
@@ -136,7 +136,7 @@ resource "coder_env" "anthropic_api_key" {
 resource "coder_env" "openai_base_url" {
   agent_id = coder_agent.dev.id
   name     = "OPENAI_BASE_URL"
-  value    = "${data.coder_workspace.me.access_url}/api/v2/aibridge/openai/v1"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai/v1"
 }
 
 resource "coder_env" "openai_api_key" {
