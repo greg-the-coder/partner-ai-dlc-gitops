@@ -110,6 +110,12 @@ RUN printf '%s\n' \
     > /usr/local/bin/coder \
     && chmod 755 /usr/local/bin/coder
 
+# Pre-create the uv cache directory OUTSIDE /home/coder. At runtime the EFS
+# persistent volume overlays /home/coder, which would hide a cache baked there,
+# so the pre-warmed MCP packages must live on /opt (part of the image, never
+# overlaid). Hand it to the coder user so uvx can also write to it at runtime.
+RUN mkdir -p /opt/uv-cache && chown coder:coder /opt/uv-cache
+
 USER coder
 WORKDIR /home/coder
 
@@ -118,3 +124,30 @@ RUN mkdir -p /home/coder/.npm-global \
     && npm config set prefix "/home/coder/.npm-global"
 
 ENV PATH="/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Point uv/uvx at the persistent on-image cache created above. This ENV is
+# inherited by the workspace container at runtime, so agent scripts and the MCP
+# servers all use /opt/uv-cache (populated below) instead of the cold, EFS-backed
+# ~/.cache/uv.
+ENV UV_CACHE_DIR=/opt/uv-cache
+
+# Pre-warm the uv cache with the AWS MCP servers so `uvx` first-connect is fast
+# instead of timing out against Claude Code's MCP startup probe (default 30s) on
+# a brand-new workspace. The heavy work -- resolving and building each package's
+# wheels -- is cached here at build time; at runtime `uvx <pkg>@latest` only does
+# a quick index check and reuses these wheels. `--help`/`timeout`/`</dev/null`
+# just trigger the resolve-and-cache then exit (the download completes before the
+# server would start, so it is cached even if the tool ignores --help). KEEP THIS
+# LIST IN SYNC with local.mcp_servers in templates/awshp-k8s-with-{claude-code,
+# kiro-cli}/main.tf. (The challenge template has no MCP servers and simply
+# carries the extra cache.)
+RUN set -ux; for p in \
+      mcp-proxy-for-aws@1.6.4 \
+      awslabs.aws-iac-mcp-server@latest \
+      awslabs.aws-pricing-mcp-server@latest \
+      awslabs.aws-serverless-mcp-server@latest \
+      awslabs.cloudwatch-mcp-server@latest ; do \
+      echo "Pre-warming $p"; \
+      timeout 180 uvx "$p" --help </dev/null >/dev/null 2>&1 || true; \
+    done; \
+    du -sh /opt/uv-cache || true
