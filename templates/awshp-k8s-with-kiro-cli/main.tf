@@ -47,19 +47,36 @@ locals {
   # non-ECR images (e.g. the codercom/enterprise-base default).
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
-  # AWS Labs MCP servers wired into Kiro CLI (mcp.json), all over stdio via `uvx`
-  # (pinned @latest, quiet logging). A citizen-builder toolkit spanning the AWS
-  # solution lifecycle: learn (documentation), design & validate IaC (iac),
-  # estimate cost (pricing), then build & operate the account (serverless,
-  # cloudwatch). All calls use the workspace IAM role
-  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region
-  # (local.aws_region, derived from the ECR image URI). See
-  # https://github.com/awslabs/mcp for each server's capabilities.
+  # MCP servers wired into Kiro CLI (mcp.json), all over stdio via `uvx`
+  # (quiet logging). A citizen-builder toolkit spanning the AWS solution
+  # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
+  # plus search/read_documentation and agent skills), design & validate IaC
+  # (iac), estimate cost (pricing), then build & operate the account (serverless,
+  # cloudwatch). All calls use the workspace IAM role (`<cluster>-workshop-user`);
+  # AWS_REGION pins the deployment operation region (local.aws_region, derived
+  # from the ECR image URI). `aws-mcp` replaces the deprecated
+  # awslabs.aws-api-mcp-server AND the standalone awslabs.aws-documentation-mcp-server
+  # (whose documentation tools it subsumes; running both would create duplicate
+  # tool names that degrade agent tool selection). See
+  # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
   mcp_servers = {
-    "awslabs-aws-documentation-mcp-server" = {
+    # AWS MCP Server (Agent Toolkit) — remote, SigV4-authenticated. The local
+    # `mcp-proxy-for-aws` runs over stdio and signs each request with the pod's
+    # IRSA credentials (the <cluster>-workshop-user role, via the default AWS
+    # credential chain) — no OAuth/browser login needed. The endpoint Region is
+    # fixed (only us-east-1 / eu-central-1 exist); `--metadata AWS_REGION` sets
+    # the default Region for the AWS operations call_aws performs (local.aws_region,
+    # us-east-2 here). Governance: basic — inherits whatever the workshop-user
+    # role can do (the server injects aws:ViaAWSMCPService / aws:CalledViaAWSMCP
+    # context keys if you later want to scope MCP-initiated actions in IAM).
+    "aws-mcp" = {
       command = "uvx"
-      args    = ["awslabs.aws-documentation-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
+      args = [
+        "mcp-proxy-for-aws@1.6.4",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--metadata", "AWS_REGION=${local.aws_region}",
+      ]
+      env = {}
     }
     "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
@@ -221,7 +238,7 @@ resource "coder_agent" "dev" {
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
     fi
 
-    # Configure Kiro CLI MCP servers (AWS documentation + IaC)
+    # Configure Kiro CLI MCP servers (AWS MCP Server + IaC/pricing/serverless/cloudwatch)
     echo "Configuring Kiro CLI MCP servers..."
 
     # Create user-level MCP configuration
