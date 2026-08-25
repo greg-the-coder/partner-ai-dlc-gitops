@@ -48,43 +48,63 @@ locals {
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   cost     = 2
 
-  # AWS Labs MCP servers added to Claude Code at user scope, all over stdio via
-  # `uvx` (pinned @latest, quiet logging). A citizen-builder toolkit spanning the
-  # AWS solution lifecycle: learn (documentation), design & validate IaC (iac),
-  # estimate cost (pricing), then build & operate the account (aws-api,
-  # serverless, cloudwatch). All calls use the workspace IAM role
-  # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
-  # See https://github.com/awslabs/mcp for each server's capabilities.
+  # Deployment region for AWS API calls the MCP servers make via the workspace
+  # IAM role. Derived from the ECR registry region embedded in workspace_image
+  # (e.g. <acct>.dkr.ecr.us-east-2.amazonaws.com/...) so it always tracks the
+  # deployment without a separate variable; falls back to us-east-1 for
+  # non-ECR images (e.g. the codercom/enterprise-base default).
+  aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
+
+  # MCP servers added to Claude Code at user scope, all over stdio via `uvx`
+  # (quiet logging). A citizen-builder toolkit spanning the AWS solution
+  # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
+  # plus search/read_documentation and agent skills), design & validate IaC
+  # (iac), estimate cost (pricing), then build & operate the account (serverless,
+  # cloudwatch). All calls use the workspace IAM role (`<cluster>-workshop-user`);
+  # AWS_REGION pins the deployment operation region (local.aws_region, derived
+  # from the ECR image URI). `aws-mcp` replaces the deprecated
+  # awslabs.aws-api-mcp-server AND the standalone awslabs.aws-documentation-mcp-server
+  # (whose documentation tools it subsumes; running both would create duplicate
+  # tool names that degrade agent tool selection). See
+  # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
   mcp_servers = {
-    "awslabs.aws-documentation-mcp-server" = {
+    # AWS MCP Server (Agent Toolkit) — remote, SigV4-authenticated. The local
+    # `mcp-proxy-for-aws` runs over stdio and signs each request with the pod's
+    # IRSA credentials (the <cluster>-workshop-user role, via the default AWS
+    # credential chain) — no OAuth/browser login needed. The endpoint Region is
+    # fixed (only us-east-1 / eu-central-1 exist); `--metadata AWS_REGION` sets
+    # the default Region for the AWS operations call_aws performs (local.aws_region,
+    # us-east-2 here). Governance: basic — inherits whatever the workshop-user
+    # role can do (the server injects aws:ViaAWSMCPService / aws:CalledViaAWSMCP
+    # context keys if you later want to scope MCP-initiated actions in IAM).
+    "aws-mcp" = {
       command = "uvx"
-      args    = ["awslabs.aws-documentation-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
+      args = [
+        "mcp-proxy-for-aws@1.6.4",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--metadata", "AWS_REGION=${local.aws_region}",
+      ]
+      env = {}
     }
-    "awslabs.aws-iac-mcp-server" = {
+    "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-iac-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR" }
     }
-    "awslabs.aws-pricing-mcp-server" = {
+    "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-pricing-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
-    "awslabs.aws-api-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.aws-api-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
-    }
-    "awslabs.aws-serverless-mcp-server" = {
+    "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-serverless-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
-    "awslabs.cloudwatch-mcp-server" = {
+    "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.cloudwatch-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
+      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
@@ -166,6 +186,13 @@ resource "coder_env" "path" {
 # honor. The Coder AI Gateway forwards to the admin-configured Amazon Bedrock
 # provider (see ai-providers/) using the control plane's centrally-held creds.
 #
+# IMPORTANT: the AI Gateway routes by PROVIDER NAME, not API type. The path
+# segment `bedrock` / `openai-compat` is the coderd_ai_provider *name* configured
+# in ai-providers/ai_providers.tf (routes are /api/v2/ai-gateway/<provider-name>/).
+# There is no /api/v2/ai-gateway/anthropic route unless a provider is named that
+# — using the API type returns "route not supported". Anthropic-format requests
+# go to the bedrock provider; OpenAI-format to openai-compat.
+#
 # NOTE: the Coder AI Gateway requires Coder v2.32+ with the Coder AI Governance
 # Add-On enabled on the deployment.
 #
@@ -177,7 +204,7 @@ resource "coder_env" "path" {
 resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
   name     = "ANTHROPIC_BASE_URL"
-  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/anthropic"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/bedrock"
 }
 
 resource "coder_env" "anthropic_api_key" {
@@ -189,7 +216,7 @@ resource "coder_env" "anthropic_api_key" {
 resource "coder_env" "openai_base_url" {
   agent_id = coder_agent.dev.id
   name     = "OPENAI_BASE_URL"
-  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai/v1"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai-compat/v1"
 }
 
 resource "coder_env" "openai_api_key" {
@@ -237,14 +264,35 @@ resource "coder_agent" "dev" {
   startup_script = <<-EOT
     set -e
 
-    # Ensure the `coder` CLI is on PATH for every coder_script/module that needs
-    # it (notably coder-login). This template pins a fixed agent PATH
-    # (coder_env.path), which drops the agent's own coder binary directory, so
-    # symlink coder into the script bin dir (the agent prepends it to PATH) here
-    # in the startup script — before the module scripts run. Mirrors the
-    # kiro-cli / challenge templates. Without this the coder-login script fails
-    # with "coder: command not found" and the agent reports a startup error.
+    # Ensure the `coder` CLI is resolvable for interactive login shells and any
+    # coder_script that shells out to it. This template pins a fixed agent PATH
+    # (coder_env.path / local.bin_path); coder_scripts run with THAT PATH, which
+    # drops the agent's own coder binary dir, so we symlink coder into
+    # $HOME/.local/bin (the first entry of local.bin_path) and mirror it into
+    # $CODER_SCRIPT_BIN_DIR. NOTE: this startup script and the claude-code
+    # module's install pipeline are launched CONCURRENTLY by the agent, so this
+    # symlink is best-effort for scripts (it can lose the startup race). Scripts
+    # that MUST call coder at their very first line (e.g. coder-utils' `coder exp
+    # sync` wrapper) cannot rely on it — which is exactly why the Claude Code
+    # bypass-permissions setup below lives HERE, in a raw startup script that
+    # needs no coder, rather than in the module's post_install_script (whose
+    # wrapper calls `coder exp sync` before its body runs and races to exit 127,
+    # surfacing as an agent start_error).
+    mkdir -p /home/coder/.local/bin
+    ln -sf /tmp/coder.*/coder /home/coder/.local/bin/coder 2>/dev/null || true
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
+
+    # Claude Code v5 dropped the dangerously_skip_permissions input; set bypass
+    # mode at user scope instead (equivalent to --dangerously-skip-permissions)
+    # and skip the dangerous-mode TOS prompt. User-scope settings.json is
+    # writable by the uid-1000 pod; managed-settings under /etc/claude-code would
+    # require root. This only writes ~/.claude/settings.json (never calls coder),
+    # and targets a different file than the module install script's ~/.claude.json,
+    # so it is safe to run concurrently with the module.
+    mkdir -p "$HOME/.claude"
+    SETTINGS="$HOME/.claude/settings.json"
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
 
     EOT
 
@@ -389,10 +437,15 @@ module "claude-code" {
   # Gateway is wired via the agent-wide coder_env above (a single X-Api-Key that
   # both Claude Code and the notebook SDKs honor), NOT the module's
   # enable_ai_gateway (whose ANTHROPIC_AUTH_TOKEN langchain-anthropic can't read).
-  # Permission bypass is set at user scope in post_install_script (managed_settings
-  # would target root-owned /etc/claude-code, which these uid-1000 pods can't
-  # write). A clickable Claude Code launcher is provided by coder_app.claude_code
-  # below (the module no longer ships one).
+  # Permission bypass is set at user scope in the agent startup_script above
+  # (managed_settings would target root-owned /etc/claude-code, which these
+  # uid-1000 pods can't write). We deliberately do NOT use the module's
+  # post_install_script: coder-utils wraps it with a `coder exp sync` call that
+  # runs before the script body, and because this template pins coder_env.path
+  # (dropping coder from the coder_script PATH) that wrapper races the startup
+  # symlink and exits 127, surfacing as an agent start_error. A clickable Claude
+  # Code launcher is provided by coder_app.claude_code below (the module no
+  # longer ships one).
 
   pre_install_script = <<-EOF
     set -e
@@ -412,23 +465,92 @@ module "claude-code" {
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
     fi
 
-    #Symlink Coder Agent
+    # Symlink the Coder agent CLI onto PATH. $HOME/.local/bin is the first entry
+    # in the template's fixed coder_env.path (local.bin_path). This is
+    # belt-and-suspenders so `coder` is resolvable for interactive login shells
+    # and for later module scripts once this pre_install step has run (the agent
+    # only injects $CODER_SCRIPT_BIN_DIR into login shells, not coder_scripts).
+    ln -sf /tmp/coder.*/coder "$HOME/.local/bin/coder"
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
 
     EOF
 
-  post_install_script = <<-EOF
+}
 
-# claude-code v5 dropped the dangerously_skip_permissions input; set bypass mode at
-# user scope instead (equivalent to --dangerously-skip-permissions) and skip the
-# dangerous-mode TOS prompt. User-scope settings are writable by the uid-1000 pod;
-# managed-settings under /etc/claude-code would require root.
-mkdir -p "$HOME/.claude"
-SETTINGS="$HOME/.claude/settings.json"
-[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
+# Reconcile ~/.claude.json to match this template on every start. Needed because
+# ~/.claude.json lives on EFS-persisted home and the claude-code module only
+# ADDS MCP servers (`claude mcp add-json`) — it never removes servers dropped
+# from the template nor updates the env (e.g. AWS_REGION) of ones that already
+# exist. So on a rebuilt workspace, stale/renamed servers and old regions would
+# linger. This script (1) makes the managed awslabs-* MCP set authoritative and
+# (2) pre-approves the current ANTHROPIC_API_KEY so users are never shown Claude
+# Code's "Detected a custom API key ... Do you want to use this API key?" prompt
+# (Claude stores the LAST 20 CHARACTERS in customApiKeyResponses.approved; the
+# Coder session token rotates each start, hence run_on_start).
+#
+# This is a STANDALONE coder_script (NOT the module's post_install, whose
+# coder-utils wrapper shells out to `coder exp sync` and would race to exit 127
+# under this template's pinned coder_env.path). It waits for the module install
+# to finish writing ~/.claude.json (hasCompletedOnboarding=true is written near
+# the end of install) so our writes are not clobbered.
+resource "coder_script" "claude_config_reconcile" {
+  count        = data.coder_workspace.me.start_count
+  agent_id     = coder_agent.dev.id
+  display_name = "Claude Code: reconcile config"
+  icon         = "/icon/claude.svg"
+  run_on_start = true
+  script       = <<-EOT
+    #!/usr/bin/env bash
+    set -u
+    CFG="$HOME/.claude.json"
+    DESIRED_MCP='${jsonencode(local.mcp_servers)}'
 
-EOF
+    # Wait up to ~120s for the module install to settle ~/.claude.json.
+    for _ in $(seq 1 60); do
+      if [ -f "$CFG" ] && jq -e '.hasCompletedOnboarding == true' "$CFG" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+    sleep 5   # let install's final trust-dialog write land
+    [ -f "$CFG" ] || echo '{}' > "$CFG"
+
+    # (1) Authoritative managed MCP set: drop existing awslabs-* entries (prunes
+    # removed/renamed servers and stale env such as an old AWS_REGION), then
+    # merge in this template's set. Non-managed (user-added) servers are kept.
+    tmp=$(mktemp)
+    if jq --argjson desired "$DESIRED_MCP" '
+          .mcpServers = ((.mcpServers // {}) | with_entries(select((.key | startswith("awslabs-")) or (.key == "aws-mcp") or (.key == "aws-api-mcp-server") | not))) + $desired
+        ' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
+      echo "Reconciled managed MCP servers in $CFG."
+    else
+      rm -f "$tmp"; echo "Warning: could not reconcile MCP servers in $CFG."
+    fi
+
+    # (2) Pre-approve the current ANTHROPIC_API_KEY so Claude Code never prompts.
+    KEY="$${ANTHROPIC_API_KEY:-}"
+    if [ -n "$KEY" ]; then
+      SUFFIX=$(printf %s "$KEY" | tail -c 20)
+      tmp=$(mktemp)
+      if jq --arg k "$SUFFIX" '
+            .customApiKeyResponses = (.customApiKeyResponses // {"approved": [], "rejected": []})
+            | .customApiKeyResponses.approved = (((.customApiKeyResponses.approved // []) + [$k]) | unique)
+            | .customApiKeyResponses.rejected = ((.customApiKeyResponses.rejected // []) - [$k])
+          ' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
+        echo "Pre-approved ANTHROPIC_API_KEY in $CFG (Claude Code will not prompt)."
+      else
+        rm -f "$tmp"; echo "Warning: could not pre-approve ANTHROPIC_API_KEY."
+      fi
+    fi
+
+    # (3) Warm the AWS MCP Server proxy's uv cache now that install has finished
+    # (this runs AFTER the module's coder-utils scripts, so it does not contend
+    # with their startup `coder exp sync` calls). The first `uvx` run installs
+    # ~77 packages / can take ~20-30s; warming here means the first
+    # `claude mcp list` probe and first real call_aws find aws-mcp responsive
+    # instead of timing out cold. Non-fatal.
+    uvx mcp-proxy-for-aws@1.6.4 --help >/dev/null 2>&1 || true
+  EOT
 }
 
 # Clickable Claude Code launcher. claude-code v5 no longer ships a web app, so
