@@ -48,32 +48,32 @@ locals {
   # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
   # See https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
-    "awslabs.aws-documentation-mcp-server" = {
+    "awslabs-aws-documentation-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-documentation-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
     }
-    "awslabs.aws-iac-mcp-server" = {
+    "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-iac-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR" }
     }
-    "awslabs.aws-pricing-mcp-server" = {
+    "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-pricing-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.aws-api-mcp-server" = {
+    "awslabs-aws-api-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-api-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.aws-serverless-mcp-server" = {
+    "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-serverless-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.cloudwatch-mcp-server" = {
+    "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.cloudwatch-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }

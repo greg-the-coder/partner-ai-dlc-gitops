@@ -116,6 +116,11 @@ resource "coder_env" "path" {
 # anthropic & openai SDKs / Strands' OpenAI provider) then authenticates to the
 # gateway with the user's Coder session token and is centrally governed.
 #
+# IMPORTANT: the AI Gateway routes by PROVIDER NAME, not API type — the path
+# segment `bedrock` / `openai-compat` is the coderd_ai_provider *name* from
+# ai-providers/ai_providers.tf (/api/v2/ai-gateway/<provider-name>/). Using the
+# API type (e.g. /anthropic) returns "route not supported".
+#
 # LIMITATION: the gateway does NOT expose a Bedrock SigV4 surface, so boto3
 # bedrock-runtime, langchain-aws ChatBedrock and llama-index-llms-bedrock still
 # call Bedrock directly via the workspace IAM role. Use the Anthropic/OpenAI
@@ -124,7 +129,7 @@ resource "coder_env" "path" {
 resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
   name     = "ANTHROPIC_BASE_URL"
-  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/anthropic"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/bedrock"
 }
 
 resource "coder_env" "anthropic_api_key" {
@@ -136,7 +141,7 @@ resource "coder_env" "anthropic_api_key" {
 resource "coder_env" "openai_base_url" {
   agent_id = coder_agent.dev.id
   name     = "OPENAI_BASE_URL"
-  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai/v1"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai-compat/v1"
 }
 
 resource "coder_env" "openai_api_key" {

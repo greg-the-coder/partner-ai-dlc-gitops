@@ -56,32 +56,32 @@ locals {
   # (`<cluster>-workshop-user`); AWS_REGION pins the deployment region.
   # See https://github.com/awslabs/mcp for each server's capabilities.
   mcp_servers = {
-    "awslabs.aws-documentation-mcp-server" = {
+    "awslabs-aws-documentation-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-documentation-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_DOCUMENTATION_PARTITION = "aws" }
     }
-    "awslabs.aws-iac-mcp-server" = {
+    "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-iac-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR" }
     }
-    "awslabs.aws-pricing-mcp-server" = {
+    "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-pricing-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.aws-api-mcp-server" = {
+    "awslabs-aws-api-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-api-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.aws-serverless-mcp-server" = {
+    "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-serverless-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
     }
-    "awslabs.cloudwatch-mcp-server" = {
+    "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.cloudwatch-mcp-server@latest"]
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "us-east-1" }
@@ -166,6 +166,13 @@ resource "coder_env" "path" {
 # honor. The Coder AI Gateway forwards to the admin-configured Amazon Bedrock
 # provider (see ai-providers/) using the control plane's centrally-held creds.
 #
+# IMPORTANT: the AI Gateway routes by PROVIDER NAME, not API type. The path
+# segment `bedrock` / `openai-compat` is the coderd_ai_provider *name* configured
+# in ai-providers/ai_providers.tf (routes are /api/v2/ai-gateway/<provider-name>/).
+# There is no /api/v2/ai-gateway/anthropic route unless a provider is named that
+# — using the API type returns "route not supported". Anthropic-format requests
+# go to the bedrock provider; OpenAI-format to openai-compat.
+#
 # NOTE: the Coder AI Gateway requires Coder v2.32+ with the Coder AI Governance
 # Add-On enabled on the deployment.
 #
@@ -177,7 +184,7 @@ resource "coder_env" "path" {
 resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
   name     = "ANTHROPIC_BASE_URL"
-  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/anthropic"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/bedrock"
 }
 
 resource "coder_env" "anthropic_api_key" {
@@ -189,7 +196,7 @@ resource "coder_env" "anthropic_api_key" {
 resource "coder_env" "openai_base_url" {
   agent_id = coder_agent.dev.id
   name     = "OPENAI_BASE_URL"
-  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai/v1"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai-compat/v1"
 }
 
 resource "coder_env" "openai_api_key" {

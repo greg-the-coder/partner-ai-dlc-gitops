@@ -42,9 +42,14 @@ agentic-AI libraries and AWS tooling baked into the image.
 The workspace points the Python agent SDKs at the Coder AI Gateway so notebook LLM
 calls are governed centrally. The agent kernel (`Python (Agents)`) inherits:
 
-- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/ai-gateway/anthropic`
-- `OPENAI_BASE_URL` → `<access_url>/api/v2/ai-gateway/openai/v1`
+- `ANTHROPIC_BASE_URL` → `<access_url>/api/v2/ai-gateway/bedrock`
+- `OPENAI_BASE_URL` → `<access_url>/api/v2/ai-gateway/openai-compat/v1`
+
 - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` → the user's Coder session token
+
+> The path segment (`bedrock` / `openai-compat`) is the **AI Gateway provider name**
+> from `ai-providers/`, not the API type — the gateway routes
+> `/api/v2/ai-gateway/<provider-name>/`.
 
 So Anthropic- and OpenAI-protocol clients route through the gateway with no extra
 config:
