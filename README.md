@@ -163,7 +163,7 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 
 | Template | Display Name | Best for |
 |----------|--------------|----------|
-| `awshp-k8s-challenge-agent` | Clash of Agents — Challenge Workspace | **Optimized for Coder Agents.** Pre-loaded Python agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr) + Bedrock. |
+| `awshp-k8s-challenge-agent` | AWS Workshop - AI Agent Development | Build & deploy AI agents to AWS. Pre-loaded agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr), AWS CDK/CLI + Bedrock. Optimized for Coder Agents. |
 | `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code AI assistant with task automation. |
 | `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
 

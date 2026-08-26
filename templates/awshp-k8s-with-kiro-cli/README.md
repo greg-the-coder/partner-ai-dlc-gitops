@@ -54,5 +54,5 @@ Storage is provisioned automatically via EFS; there is no disk-size parameter.
 ## Notes
 - Tools installed outside `/home/coder` are part of the container image; rebuild the image to
   add system packages. Files under `/home/coder` persist across restarts.
-- For Coder Agents, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent) template
-  is the environment optimized for agentic use.
+- For building and deploying AI agents to AWS, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent)
+  template ships the agent frameworks + AWS deploy tooling (also optimized for Coder Agents).
