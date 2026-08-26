@@ -59,6 +59,27 @@ locals {
   # (whose documentation tools it subsumes; running both would create duplicate
   # tool names that degrade agent tool selection). See
   # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
+  # Common env applied to EVERY MCP server. The Kiro IDE (kiro-agent) launches
+  # stdio MCP servers with a FILTERED environment (the MCP SDK's
+  # getDefaultEnvironment only forwards HOME/PATH/etc.), so - unlike the Kiro
+  # CLI, which inherits the login shell - the servers do NOT see the pod's IRSA
+  # AWS_* vars. We therefore pin region + STS behaviour here, point uv at the
+  # on-image warm cache, and inject the runtime IRSA role/token below. Without
+  # this the aws-mcp proxy can't SigV4-sign and its initialize is rejected with
+  # "MCP error -32602: Invalid request parameters".
+  mcp_common_env = {
+    AWS_REGION                 = local.aws_region
+    AWS_DEFAULT_REGION         = local.aws_region
+    AWS_STS_REGIONAL_ENDPOINTS = "regional"
+    UV_CACHE_DIR               = "/opt/uv-cache"
+  }
+
+  # Versions are PINNED (not @latest) so the on-image pre-warmed uv cache is
+  # always a hit. With @latest, package drift between image build and workspace
+  # start caused a cold re-download (tens of seconds) that blew past the Kiro
+  # IDE's ~60s MCP connect timeout ("MCP error -32001: Request timed out").
+  # KEEP THESE VERSIONS IN SYNC with images/coder-workspace-base/Dockerfile and
+  # templates/awshp-k8s-with-claude-code/main.tf.
   aws_mcp_servers = {
     "aws-mcp" = {
       command = "uvx"
@@ -67,27 +88,27 @@ locals {
         "https://aws-mcp.us-east-1.api.aws/mcp",
         "--metadata", "AWS_REGION=${local.aws_region}",
       ]
-      env = {}
+      env = local.mcp_common_env
     }
     "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-iac-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+      args    = ["awslabs.aws-iac-mcp-server==1.0.24"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-pricing-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
+      args    = ["awslabs.aws-pricing-mcp-server==1.1.0"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-serverless-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
+      args    = ["awslabs.aws-serverless-mcp-server==0.2.0"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.cloudwatch-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
+      args    = ["awslabs.cloudwatch-mcp-server==0.2.0"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
   }
 
@@ -225,6 +246,24 @@ resource "coder_agent" "dev" {
     cat > $HOME/.kiro/settings/mcp.json <<'MCP_EOF'
 ${local.mcp_json}
 MCP_EOF
+
+    # Inject the pod's live IRSA credentials into every MCP server's env. The
+    # Kiro IDE launches stdio servers with a filtered environment and does NOT
+    # forward AWS_ROLE_ARN / the web-identity token, so the aws-mcp proxy can't
+    # SigV4-sign (initialize fails with "MCP error -32602"). Writing the values
+    # into each server's declared env (which the MCP client DOES pass through)
+    # fixes this for the IDE while remaining a no-op for the CLI.
+    if command -v jq >/dev/null 2>&1 && [ -n "$${AWS_ROLE_ARN:-}" ]; then
+      TOKF="$${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
+      MCPTMP=$(mktemp)
+      if jq --arg role "$AWS_ROLE_ARN" --arg tok "$TOKF" \
+          '.mcpServers |= map_values(.env = ((.env // {}) + {AWS_ROLE_ARN: $role, AWS_WEB_IDENTITY_TOKEN_FILE: $tok}))' \
+          "$HOME/.kiro/settings/mcp.json" > "$MCPTMP" 2>/dev/null && mv "$MCPTMP" "$HOME/.kiro/settings/mcp.json"; then
+        echo "Injected IRSA credentials into Kiro MCP server env."
+      else
+        rm -f "$MCPTMP"; echo "Warning: could not inject IRSA credentials into mcp.json."
+      fi
+    fi
 
     echo "Kiro CLI MCP configuration completed (user-level)"
 
