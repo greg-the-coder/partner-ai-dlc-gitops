@@ -47,33 +47,7 @@ locals {
   # non-ECR images (e.g. the codercom/enterprise-base default).
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
-  # Coder workspace MCP tools that Kiro / KiroCrew agents may call without a
-  # per-tool approval prompt. Matches the working KiroCrew prototype.
-  coder_mcp_autoapprove = [
-    "coder_workspace_edit_file", "coder_workspace_read_file", "coder_get_task_status",
-    "coder_workspace_write_file", "coder_workspace_ls", "coder_workspace_bash",
-    "coder_get_task_logs", "coder_list_templates", "coder_create_task",
-    "coder_get_authenticated_user", "coder_delete_task", "coder_send_task_input",
-    "coder_list_workspaces", "coder_workspace_edit_files", "coder_workspace_list_apps",
-    "coder_workspace_port_forward", "coder_create_workspace_build",
-    "coder_template_version_parameters",
-  ]
-
-  # Lightweight Coder HTTP MCP server. KiroCrew reads the SAME
-  # ~/.kiro/settings/mcp.json as Kiro CLI and probes EVERY server at gateway
-  # start; an HTTP server answers instantly, unlike a heavy `uvx` stdio server
-  # whose cold-start spawn stalls KiroCrew's asyncio loop and crash-loops the
-  # gateway. This mirrors the prototype and gives crew agents Coder's workspace
-  # tools (files, bash, tasks, workspaces).
-  coder_mcp_server = {
-    coder = {
-      url         = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/experimental/mcp/http"
-      headers     = { Authorization = "Bearer ${data.coder_workspace_owner.me.session_token}" }
-      autoApprove = local.coder_mcp_autoapprove
-    }
-  }
-
-  # AWS MCP servers for plain Kiro CLI (mcp.json), all over stdio via `uvx`
+  # AWS MCP servers for Kiro CLI (mcp.json), all over stdio via `uvx`
   # (quiet logging). A citizen-builder toolkit spanning the AWS solution
   # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
   # plus search/read_documentation and agent skills), design & validate IaC
@@ -117,16 +91,8 @@ locals {
     }
   }
 
-  # KiroCrew shares ~/.kiro/settings/mcp.json with Kiro CLI and PROBES EVERY
-  # server at gateway start. The heavy AWS `uvx` servers' cold-start spawns
-  # exceed KiroCrew's probe timeout and stall its asyncio loop -> loop-stall
-  # crash-loop -> the gateway never stays up. So expose ONLY the lightweight
-  # Coder HTTP MCP server when KiroCrew is enabled; expose the AWS MCP servers
-  # for plain Kiro CLI otherwise.
-  # jsonencode each set separately, then choose the string, so the conditional's
-  # two branches share a consistent type (the maps have different value shapes:
-  # HTTP {url,headers,autoApprove} vs stdio {command,args,env}).
-  mcp_json = data.coder_parameter.enable_kirocrew.value == "true" ? jsonencode({ mcpServers = local.coder_mcp_server }) : jsonencode({ mcpServers = local.aws_mcp_servers })
+  # Written to ~/.kiro/settings/mcp.json by the startup script for Kiro CLI.
+  mcp_json = jsonencode({ mcpServers = local.aws_mcp_servers })
 }
 
 # Minimum vCPUs needed 
@@ -183,21 +149,6 @@ data "coder_parameter" "compute_lane" {
     value = "spot"
     icon  = "/icon/aws.png"
   }
-}
-
-# Opt-in KiroCrew: multi-agent Kiro orchestration gateway + dashboard. When
-# enabled the kirocrew module installs the KiroCrew CLI/gateway and surfaces a
-# self-authenticating dashboard app tile. Disabled by default to keep the base
-# workspace lean.
-data "coder_parameter" "enable_kirocrew" {
-  name         = "enable_kirocrew"
-  display_name = "Enable KiroCrew"
-  description  = "Install KiroCrew (multi-agent Kiro orchestration) and expose its dashboard as a Coder app. Adds ~1-2 min to first start while the gateway + managed Python venv are provisioned."
-  type         = "bool"
-  default      = "false"
-  mutable      = true
-  order        = 4
-  icon         = "/icon/kiro.svg"
 }
 
 data "coder_workspace" "me" {}
@@ -266,9 +217,7 @@ resource "coder_agent" "dev" {
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
     fi
 
-    # Write the Kiro MCP configuration. local.mcp_json is conditional: under
-    # KiroCrew it is the lightweight Coder HTTP MCP server only (heavy uvx servers
-    # crash the crew gateway's startup probe); otherwise it is the AWS MCP servers.
+    # Write the Kiro CLI MCP configuration (the AWS MCP servers).
     echo "Configuring Kiro CLI MCP servers..."
 
     # Create user-level MCP configuration
@@ -278,18 +227,6 @@ ${local.mcp_json}
 MCP_EOF
 
     echo "Kiro CLI MCP configuration completed (user-level)"
-
-    # KiroCrew prerequisites (only when the KiroCrew option is enabled). KiroCrew
-    # provisions a managed Python venv (>=3.10) and its installer verifies a
-    # signed manifest with openssl/sha256sum. Best-effort; the module's script
-    # installs the CLI/gateway and its healthcheck surfaces any failure.
-    if [ "${data.coder_parameter.enable_kirocrew.value}" = "true" ]; then
-      echo "Ensuring KiroCrew prerequisites..."
-      if ! python3 -m venv --help >/dev/null 2>&1; then
-        sudo apt-get update -qq || true
-        sudo apt-get install -y python3-venv python3-dev >/dev/null 2>&1 || true
-      fi
-    fi
 
     # Configure workspace trust settings for Kiro IDE
     echo "Configuring Kiro IDE workspace trust..."
@@ -395,22 +332,6 @@ module "kiro" {
   version  = "1.2.1"
   agent_id = coder_agent.dev.id
   order    = 1
-}
-
-# Opt-in KiroCrew gateway + self-authenticating dashboard app. Instantiated only
-# when the enable_kirocrew parameter is set. The module derives the dashboard
-# app's subdomain origin (which, in this deployment, INCLUDES the agent-name
-# segment "dev"), trusts it in the gateway Host/Origin allowlist, sets
-# dashboard.url, and runs a token-minting redirector so the visible tile
-# self-authenticates.
-module "kirocrew" {
-  count      = data.coder_parameter.enable_kirocrew.value == "true" ? 1 : 0
-  source     = "./modules/kirocrew"
-  agent_id   = coder_agent.dev.id
-  agent_name = "dev"
-  port       = 8899
-  use_cached = true
-  order      = 3
 }
 
 # Auto-install the Jupyter extension for the Kiro IDE.
