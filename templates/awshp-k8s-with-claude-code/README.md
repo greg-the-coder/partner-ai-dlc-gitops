@@ -97,5 +97,5 @@ Storage is provisioned automatically via EFS; there is no disk-size parameter.
   for the gateway's OpenAI-compatible path are baked into the shared base image
   (`images/coder-workspace-base/Dockerfile`); rebuild the workspace images (Step 1 pipeline)
   to pick them up on the pre-baked `Python (Agents)` kernel.
-- For Coder Agents, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent) template
-  is the environment optimized for agentic use.
+- For building and deploying AI agents to AWS, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent)
+  template ships the agent frameworks + AWS deploy tooling (also optimized for Coder Agents).

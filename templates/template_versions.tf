@@ -117,13 +117,13 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
 }
 
 ###########################################################
-# Challenge Templates - Clash of Agents Workshop
+# AI Agent Development Template
 ###########################################################
 
 resource "coderd_template" "challenge-agent" {
   name        = "awshp-k8s-challenge-agent"
-  display_name = "Clash of Agents - Challenge Workspace"
-  description = "Optimized for Coder Agents: Python agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr) + Bedrock on Fargate."
+  display_name = "AWS Workshop - AI Agent Development"
+  description = "Build and deploy AI agents to AWS on Fargate: Strands, LangGraph, LangChain, LlamaIndex, Lyzr + Bedrock and AWS CDK/CLI."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-challenge-agent"
