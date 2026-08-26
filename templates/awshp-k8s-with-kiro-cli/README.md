@@ -1,6 +1,6 @@
 ---
 display_name: AWS Workshop - Kubernetes with Kiro CLI
-description: Fargate workspace with the Kiro CLI AI assistant, AWS Labs MCP servers (optional KiroCrew), AWS CLI/CDK, Node.js, and Amazon Bedrock access.
+description: Fargate workspace with the Kiro CLI AI assistant, AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
@@ -23,8 +23,6 @@ A serverless Coder workspace running on **AWS Fargate** with the
   run on demand via `uvx`: AWS **documentation**, **IaC** (CloudFormation + CDK),
   **pricing**, **API** (`call_aws`), **Serverless**, and **CloudWatch** — covering the
   learn → design → cost → build/deploy → operate lifecycle. Calls use the workspace IAM role.
-- **KiroCrew** (optional) — multi-agent Kiro orchestration gateway + dashboard,
-  enabled with the **Enable KiroCrew** parameter (see below).
 - **Amazon Bedrock** access via the workspace IAM role
 
 ### Developer environment
@@ -45,19 +43,8 @@ A serverless Coder workspace running on **AWS Fargate** with the
 | CPU cores | 2 | 2–8 |
 | Memory (GB) | 4 | 4–16 |
 | Compute Lane | fargate | fargate / spot |
-| Enable KiroCrew | false | true / false |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
-
-### KiroCrew (optional)
-Set **Enable KiroCrew** to `true` to install the
-[KiroCrew](https://kiro.dev) multi-agent orchestration gateway and expose its
-dashboard as a Coder app. The **KiroCrew** app tile self-authenticates (a
-loopback redirector mints a short-lived token and 302s to the dashboard
-subdomain app), so no manual `kirocrew token` step is needed. Adds ~1–2 min to
-first start while the gateway and its managed Python venv are provisioned; the
-app's healthcheck surfaces readiness. For headless Kiro auth, create a Coder
-user secret targeting `KIRO_API_KEY`.
 
 ## Getting started
 1. Create a workspace from this template.

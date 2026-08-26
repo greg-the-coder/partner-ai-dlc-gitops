@@ -67,6 +67,25 @@ locals {
   # (whose documentation tools it subsumes; running both would create duplicate
   # tool names that degrade agent tool selection). See
   # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
+  #
+  # Common env applied to EVERY MCP server. Claude Code (a CLI) inherits the
+  # login-shell environment, but we set these explicitly so the servers are
+  # robust regardless of launcher (and to match the Kiro IDE, whose MCP client
+  # forwards only a filtered env). Pins region + STS behaviour, points uv at the
+  # on-image warm cache, and the reconcile script below injects the runtime IRSA
+  # role/token so the aws-mcp proxy can SigV4-sign.
+  mcp_common_env = {
+    AWS_REGION                 = local.aws_region
+    AWS_DEFAULT_REGION         = local.aws_region
+    AWS_STS_REGIONAL_ENDPOINTS = "regional"
+    UV_CACHE_DIR               = "/opt/uv-cache"
+  }
+
+  # Versions are PINNED (not @latest) so the on-image pre-warmed uv cache is
+  # always a hit; @latest drift caused cold re-downloads that timed out MCP
+  # startup probes. KEEP THESE VERSIONS IN SYNC with
+  # images/coder-workspace-base/Dockerfile and
+  # templates/awshp-k8s-with-kiro-cli/main.tf.
   mcp_servers = {
     # AWS MCP Server (Agent Toolkit) — remote, SigV4-authenticated. The local
     # `mcp-proxy-for-aws` runs over stdio and signs each request with the pod's
@@ -84,27 +103,27 @@ locals {
         "https://aws-mcp.us-east-1.api.aws/mcp",
         "--metadata", "AWS_REGION=${local.aws_region}",
       ]
-      env = {}
+      env = local.mcp_common_env
     }
     "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-iac-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR" }
+      args    = ["awslabs.aws-iac-mcp-server==1.0.24"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-aws-pricing-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-pricing-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
+      args    = ["awslabs.aws-pricing-mcp-server==1.1.0"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-aws-serverless-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-serverless-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
+      args    = ["awslabs.aws-serverless-mcp-server==0.2.0"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-cloudwatch-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.cloudwatch-mcp-server@latest"]
-      env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
+      args    = ["awslabs.cloudwatch-mcp-server==0.2.0"]
+      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
@@ -537,9 +556,15 @@ resource "coder_script" "claude_config_reconcile" {
     # (1) Authoritative managed MCP set: drop existing awslabs-* entries (prunes
     # removed/renamed servers and stale env such as an old AWS_REGION), then
     # merge in this template's set. Non-managed (user-added) servers are kept.
+    # The pod's live IRSA role/token are injected into every managed server's
+    # env so SigV4-signed calls (the aws-mcp proxy) authenticate even if the
+    # launcher does not forward AWS_* (matches the Kiro IDE behaviour).
+    ROLE="$${AWS_ROLE_ARN:-}"
+    TOKF="$${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
     tmp=$(mktemp)
-    if jq --argjson desired "$DESIRED_MCP" '
-          .mcpServers = ((.mcpServers // {}) | with_entries(select((.key | startswith("awslabs-")) or (.key == "aws-mcp") or (.key == "aws-api-mcp-server") | not))) + $desired
+    if jq --argjson desired "$DESIRED_MCP" --arg role "$ROLE" --arg tok "$TOKF" '
+          ($desired | if ($role | length) > 0 then map_values(.env = ((.env // {}) + {AWS_ROLE_ARN: $role, AWS_WEB_IDENTITY_TOKEN_FILE: $tok})) else . end) as $d
+          | .mcpServers = ((.mcpServers // {}) | with_entries(select((.key | startswith("awslabs-")) or (.key == "aws-mcp") or (.key == "aws-api-mcp-server") | not))) + $d
         ' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
       echo "Reconciled managed MCP servers in $CFG."
     else

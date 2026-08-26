@@ -132,21 +132,23 @@ ENV PATH="/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/us
 ENV UV_CACHE_DIR=/opt/uv-cache
 
 # Pre-warm the uv cache with the AWS MCP servers so `uvx` first-connect is fast
-# instead of timing out against Claude Code's MCP startup probe (default 30s) on
-# a brand-new workspace. The heavy work -- resolving and building each package's
-# wheels -- is cached here at build time; at runtime `uvx <pkg>@latest` only does
-# a quick index check and reuses these wheels. `--help`/`timeout`/`</dev/null`
-# just trigger the resolve-and-cache then exit (the download completes before the
-# server would start, so it is cached even if the tool ignores --help). KEEP THIS
-# LIST IN SYNC with local.mcp_servers in templates/awshp-k8s-with-{claude-code,
-# kiro-cli}/main.tf. (The challenge template has no MCP servers and simply
-# carries the extra cache.)
+# instead of timing out against the MCP startup probe (Claude Code ~30s; the
+# Kiro IDE ~60s) on a brand-new workspace. The heavy work -- resolving and
+# building each package's wheels -- is cached here at build time; because the
+# versions are PINNED (identical to local.(aws_)mcp_servers in the templates),
+# at runtime `uvx <pkg>==<ver>` is an offline cache hit and needs no index
+# check or download. (Earlier the servers used @latest, so package drift
+# between image build and workspace start caused a cold re-download that timed
+# out the IDE MCP connect.) `--help`/`timeout`/`</dev/null` just trigger the
+# resolve-and-cache then exit. KEEP THESE VERSIONS IN SYNC with
+# local.(aws_)mcp_servers in templates/awshp-k8s-with-{claude-code,kiro-cli}/main.tf.
+# (The challenge template has no MCP servers and simply carries the extra cache.)
 RUN set -ux; for p in \
       mcp-proxy-for-aws@1.6.4 \
-      awslabs.aws-iac-mcp-server@latest \
-      awslabs.aws-pricing-mcp-server@latest \
-      awslabs.aws-serverless-mcp-server@latest \
-      awslabs.cloudwatch-mcp-server@latest ; do \
+      awslabs.aws-iac-mcp-server==1.0.24 \
+      awslabs.aws-pricing-mcp-server==1.1.0 \
+      awslabs.aws-serverless-mcp-server==0.2.0 \
+      awslabs.cloudwatch-mcp-server==0.2.0 ; do \
       echo "Pre-warming $p"; \
       timeout 180 uvx "$p" --help </dev/null >/dev/null 2>&1 || true; \
     done; \

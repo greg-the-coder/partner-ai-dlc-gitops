@@ -174,8 +174,6 @@ The **Claude Code** and **Kiro CLI** templates ship a citizen-builder set of
 [AWS Labs MCP servers](https://github.com/awslabs/mcp) preconfigured for their assistants
 — AWS documentation, IaC (CloudFormation + CDK), pricing, API (`call_aws`), Serverless, and
 CloudWatch — running on demand via `uvx`.
-The **Kiro CLI** template additionally offers an optional **KiroCrew** multi-agent
-orchestration gateway + dashboard, toggled with its **Enable KiroCrew** parameter.
 
 ## Prerequisites
 
