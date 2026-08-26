@@ -139,18 +139,19 @@ locals {
   extra_mcp_b64 = var.extra_mcp_json != "" ? base64encode(var.extra_mcp_json) : ""
   aws_token_b64 = var.aws_builder_id_token != "" ? base64encode(var.aws_builder_id_token) : ""
 
-  # This Coder deployment serves subdomain apps at
-  #   <slug>--<agent>--<workspace>--<owner>.<access-host>
-  # (note the agent-name segment, unlike some deployments). Build the dashboard
-  # app's external origin so the gateway trusts it (Host allowlist + dashboard.url)
-  # and the redirector can 302 the browser there carrying a freshly-minted token.
-  dashboard_slug   = "${var.slug}-dashboard"
-  access_host      = trimsuffix(replace(replace(data.coder_workspace.me.access_url, "https://", ""), "http://", ""), "/")
-  dashboard_origin = "https://${local.dashboard_slug}--${var.agent_name}--${data.coder_workspace.me.name}--${data.coder_workspace_owner.me.name}.${local.access_host}"
-
-  # Origins the gateway trusts in its Host/Origin allowlist: the dashboard app
-  # origin (what the browser sends after the redirect) plus any caller extras.
-  gateway_allowed_origins = trimspace(var.allowed_origins) != "" ? "${local.dashboard_origin},${var.allowed_origins}" : local.dashboard_origin
+  # This deployment is a basic CloudFront distribution with NO wildcard domain,
+  # so Coder subdomain apps do not resolve (*.<host> is NXDOMAIN) and the
+  # KiroCrew dashboard SPA (which must be served at the root of its own origin)
+  # cannot be proxied as a subdomain/path Coder app. Default instead to the
+  # localhost / `coder port-forward` model KiroCrew is built for: the gateway
+  # binds localhost:<port>, dashboard.url is the localhost origin (correct
+  # cookie/CORS scope for a forwarded port), and the visible tile is a small
+  # path-based launcher page (the redirector) that prints the port-forward
+  # command + a freshly-minted, tokenized http://localhost:<port>/ URL. A
+  # consumer that later adds a custom domain + wildcard DNS/Route53 can switch
+  # these back to subdomain apps for a one-click dashboard.
+  dashboard_origin        = "http://localhost:${var.port}"
+  gateway_allowed_origins = trimspace(var.allowed_origins)
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -174,18 +175,22 @@ resource "coder_script" "kirocrew" {
     ALLOWED_ORIGINS = local.gateway_allowed_origins
     DASHBOARD_URL   = local.dashboard_origin
     REDIRECT_PORT   = var.redirect_port
+    WS_NAME         = data.coder_workspace.me.name
+    OWNER           = data.coder_workspace_owner.me.name
   })
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Coder apps
+# Coder app
 #
-# The visible "kirocrew" tile points at a tiny loopback redirector (see run.sh)
-# that mints a short-lived token and 302-redirects to the hidden dashboard app
-# carrying ?token=…, so clicking the tile lands on an already-authenticated
-# dashboard — no manual `kirocrew token`, no separate URL. KiroCrew requires a
-# token for every browser request (loopback is not trusted), and a static
-# coder_app URL can't embed a runtime token, which is why the redirector exists.
+# No wildcard domain on this deployment, so subdomain apps don't resolve. The
+# visible "KiroCrew" tile is a PATH-BASED app (subdomain=false) that serves a
+# small launcher page (the redirector in run.sh): it prints the `coder
+# port-forward` command and a freshly-minted, tokenized http://localhost:<port>/
+# URL. The dashboard SPA is served by the gateway on localhost:<port> and is
+# reached over that forwarded port (an SPA can't be proxied under a Coder path
+# prefix). Add a custom domain + wildcard DNS later to switch back to a
+# one-click subdomain dashboard.
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "coder_app" "kirocrew" {
@@ -194,34 +199,14 @@ resource "coder_app" "kirocrew" {
   display_name = "KiroCrew"
   url          = "http://localhost:${var.redirect_port}/"
   icon         = "/icon/kiro.svg"
-  subdomain    = true
+  subdomain    = false
   share        = var.share
   order        = var.order
   group        = var.group
-  open_in      = var.open_in
+  open_in      = "tab"
 
   healthcheck {
     url       = "http://localhost:${var.redirect_port}/healthz"
-    interval  = 5
-    threshold = 6
-  }
-}
-
-# Hidden target that actually serves the dashboard SPA (and its websocket) via
-# Coder's subdomain proxy. The redirector 302s the browser here with a token.
-resource "coder_app" "kirocrew_dashboard" {
-  agent_id     = var.agent_id
-  slug         = local.dashboard_slug
-  display_name = "KiroCrew Dashboard"
-  url          = "http://localhost:${var.port}/"
-  icon         = "/icon/kiro.svg"
-  subdomain    = true
-  share        = var.share
-  hidden       = true
-  open_in      = var.open_in
-
-  healthcheck {
-    url       = "http://localhost:${var.port}/health"
     interval  = 5
     threshold = 6
   }

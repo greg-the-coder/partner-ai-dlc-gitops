@@ -29,6 +29,8 @@ AWS_TOKEN_B64='${AWS_TOKEN_B64}'
 ALLOWED_ORIGINS='${ALLOWED_ORIGINS}'
 DASHBOARD_URL='${DASHBOARD_URL}'
 REDIRECT_PORT='${REDIRECT_PORT}'
+WS_NAME='${WS_NAME}'
+OWNER='${OWNER}'
 
 export PATH="$INSTALL_PREFIX:$HOME/.local/bin:$HOME/bin:$PATH"
 
@@ -230,34 +232,54 @@ disown 2>/dev/null || true
 
 echo "✓ KiroCrew gateway launch dispatched; readiness is surfaced by the KiroCrew app healthcheck."
 
-# ── Token-minting redirector (self-authenticating app tile) ───────────────────
-# The visible Coder "kirocrew" app points at this loopback redirector. On each
-# hit it mints a short-lived token from the gateway's loopback secret and
-# 302-redirects to the hidden dashboard app carrying ?token=…, so the tile lands
-# on an already-authenticated dashboard. /healthz returns 200 without minting so
-# the Coder app healthcheck doesn't burn tokens.
-if [ -n "${REDIRECT_PORT}" ] && [ -n "${DASHBOARD_URL}" ]; then
+# ── Access launcher (path-based app tile) ────────────────────────────────
+# No wildcard domain on this deployment, so the KiroCrew dashboard SPA cannot be
+# served through a Coder subdomain/path proxy. The visible "KiroCrew" tile
+# (path-based) points at this small loopback server, which renders a launcher
+# page: the `coder port-forward` command for this workspace plus a freshly-
+# minted, tokenized http://localhost:PORT/ link. /healthz returns 200 without
+# minting so the Coder app healthcheck doesn't burn tokens.
+if [ -n "${REDIRECT_PORT}" ]; then
   REDIR_PATH="$HOME/.kiro/crew/redirect-gateway.py"
   mkdir -p "$HOME/.kiro/crew"
   cat > "$REDIR_PATH" <<'PYEOF'
-import http.server, urllib.request, json, os
+import http.server, urllib.request, json, os, html
 
 REDIR_PORT = int(os.environ["REDIR_PORT"])
-GW_BASE    = "http://127.0.0.1:" + os.environ["GW_PORT"]
-DASH       = os.environ["DASH_ORIGIN"].rstrip("/")
+GW_PORT    = os.environ["GW_PORT"]
+GW_BASE    = "http://127.0.0.1:" + GW_PORT
+WS         = os.environ.get("WS_NAME", "")
+OWNER      = os.environ.get("OWNER", "")
 SECRET     = os.path.expanduser("~/.kiro/crew/.local_secret")
+
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>KiroCrew access</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.55;color:#111}
+h2{margin-bottom:4px}code{background:#f4f4f5;padding:2px 6px;border-radius:4px}
+pre{background:#f4f4f5;padding:12px 14px;border-radius:8px;overflow:auto;user-select:all}
+a.btn{display:inline-block;padding:10px 18px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;font-weight:600}
+.muted{color:#666;font-size:.9em}.warn{color:#9a3412}
+</style></head><body>
+<h2>KiroCrew</h2>
+<p class="muted">%(status)s</p>
+<p>This Coder deployment has no wildcard domain, so the dashboard is reached over a forwarded port:</p>
+<ol>
+<li><p>On your machine, forward the gateway port:</p><pre>%(pf)s</pre></li>
+<li><p>Then open the dashboard:</p><p>%(link)s</p></li>
+</ol>
+<p class="muted">The token is valid ~24 hours. You can also mint one in the workspace terminal with <code>kirocrew token</code>. Reload this page for a fresh link once the gateway is up.</p>
+</body></html>"""
+
+
+def mint():
+    secret = open(SECRET).read().strip()
+    req = urllib.request.Request(GW_BASE + "/api/token/local?ttl=24h",
+                                 headers={"X-Local-Secret": secret})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.load(resp).get("token", "")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    def _mint(self):
-        secret = open(SECRET).read().strip()
-        req = urllib.request.Request(
-            GW_BASE + "/api/token/local?ttl=24h",
-            headers={"X-Local-Secret": secret},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.load(resp).get("token", "")
-
     def do_GET(self):
         if self.path.startswith("/healthz"):
             self.send_response(200)
@@ -265,17 +287,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"ok")
             return
         try:
-            token = self._mint()
+            token = mint()
         except Exception:
             token = ""
-        if not token:
-            self.send_response(503)
-            self.end_headers()
-            self.wfile.write(b"KiroCrew gateway still starting - retry shortly")
-            return
-        self.send_response(302)
-        self.send_header("Location", DASH + "/?token=" + token)
+        pf = "coder port-forward %s/%s --tcp %s:%s" % (OWNER, WS, GW_PORT, GW_PORT)
+        if token:
+            url = "http://localhost:%s/?token=%s" % (GW_PORT, token)
+            link = '<a class="btn" href="%s">Open KiroCrew dashboard</a>' % url
+            status = "Gateway is running."
+        else:
+            link = '<span class="warn">Gateway is still starting &mdash; reload in a moment.</span>'
+            status = "Gateway is starting (or waiting for `kiro-cli login`)."
+        body = PAGE % {"status": html.escape(status), "pf": html.escape(pf), "link": link}
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
+        self.wfile.write(body.encode())
 
     def log_message(self, *args):
         pass
@@ -284,8 +311,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", REDIR_PORT), Handler).serve_forever()
 PYEOF
   : > /tmp/kirocrew-redirect.log 2>/dev/null || true
-  setsid nohup env REDIR_PORT="${REDIRECT_PORT}" GW_PORT="${PORT}" DASH_ORIGIN="${DASHBOARD_URL}" \
+  setsid nohup env REDIR_PORT="${REDIRECT_PORT}" GW_PORT="${PORT}" WS_NAME="$WS_NAME" OWNER="$OWNER" \
     python3 "$REDIR_PATH" >> /tmp/kirocrew-redirect.log 2>&1 < /dev/null &
   disown 2>/dev/null || true
-  echo "✓ KiroCrew redirector dispatched on port ${REDIRECT_PORT} → ${DASHBOARD_URL}"
+  echo "✓ KiroCrew access launcher on port ${REDIRECT_PORT} (dashboard via 'coder port-forward' to ${PORT})"
 fi
