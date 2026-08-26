@@ -47,7 +47,33 @@ locals {
   # non-ECR images (e.g. the codercom/enterprise-base default).
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
-  # MCP servers wired into Kiro CLI (mcp.json), all over stdio via `uvx`
+  # Coder workspace MCP tools that Kiro / KiroCrew agents may call without a
+  # per-tool approval prompt. Matches the working KiroCrew prototype.
+  coder_mcp_autoapprove = [
+    "coder_workspace_edit_file", "coder_workspace_read_file", "coder_get_task_status",
+    "coder_workspace_write_file", "coder_workspace_ls", "coder_workspace_bash",
+    "coder_get_task_logs", "coder_list_templates", "coder_create_task",
+    "coder_get_authenticated_user", "coder_delete_task", "coder_send_task_input",
+    "coder_list_workspaces", "coder_workspace_edit_files", "coder_workspace_list_apps",
+    "coder_workspace_port_forward", "coder_create_workspace_build",
+    "coder_template_version_parameters",
+  ]
+
+  # Lightweight Coder HTTP MCP server. KiroCrew reads the SAME
+  # ~/.kiro/settings/mcp.json as Kiro CLI and probes EVERY server at gateway
+  # start; an HTTP server answers instantly, unlike a heavy `uvx` stdio server
+  # whose cold-start spawn stalls KiroCrew's asyncio loop and crash-loops the
+  # gateway. This mirrors the prototype and gives crew agents Coder's workspace
+  # tools (files, bash, tasks, workspaces).
+  coder_mcp_server = {
+    coder = {
+      url         = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/experimental/mcp/http"
+      headers     = { Authorization = "Bearer ${data.coder_workspace_owner.me.session_token}" }
+      autoApprove = local.coder_mcp_autoapprove
+    }
+  }
+
+  # AWS MCP servers for plain Kiro CLI (mcp.json), all over stdio via `uvx`
   # (quiet logging). A citizen-builder toolkit spanning the AWS solution
   # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
   # plus search/read_documentation and agent skills), design & validate IaC
@@ -59,16 +85,7 @@ locals {
   # (whose documentation tools it subsumes; running both would create duplicate
   # tool names that degrade agent tool selection). See
   # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
-  mcp_servers = {
-    # AWS MCP Server (Agent Toolkit) — remote, SigV4-authenticated. The local
-    # `mcp-proxy-for-aws` runs over stdio and signs each request with the pod's
-    # IRSA credentials (the <cluster>-workshop-user role, via the default AWS
-    # credential chain) — no OAuth/browser login needed. The endpoint Region is
-    # fixed (only us-east-1 / eu-central-1 exist); `--metadata AWS_REGION` sets
-    # the default Region for the AWS operations call_aws performs (local.aws_region,
-    # us-east-2 here). Governance: basic — inherits whatever the workshop-user
-    # role can do (the server injects aws:ViaAWSMCPService / aws:CalledViaAWSMCP
-    # context keys if you later want to scope MCP-initiated actions in IAM).
+  aws_mcp_servers = {
     "aws-mcp" = {
       command = "uvx"
       args = [
@@ -99,7 +116,17 @@ locals {
       env     = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = local.aws_region }
     }
   }
-  mcp_json = jsonencode({ mcpServers = local.mcp_servers })
+
+  # KiroCrew shares ~/.kiro/settings/mcp.json with Kiro CLI and PROBES EVERY
+  # server at gateway start. The heavy AWS `uvx` servers' cold-start spawns
+  # exceed KiroCrew's probe timeout and stall its asyncio loop -> loop-stall
+  # crash-loop -> the gateway never stays up. So expose ONLY the lightweight
+  # Coder HTTP MCP server when KiroCrew is enabled; expose the AWS MCP servers
+  # for plain Kiro CLI otherwise.
+  # jsonencode each set separately, then choose the string, so the conditional's
+  # two branches share a consistent type (the maps have different value shapes:
+  # HTTP {url,headers,autoApprove} vs stdio {command,args,env}).
+  mcp_json = data.coder_parameter.enable_kirocrew.value == "true" ? jsonencode({ mcpServers = local.coder_mcp_server }) : jsonencode({ mcpServers = local.aws_mcp_servers })
 }
 
 # Minimum vCPUs needed 
@@ -220,7 +247,8 @@ resource "coder_agent" "dev" {
     interval     = 60
     timeout      = 1
   }
-  startup_script = <<-EOT
+  startup_script_behavior = "blocking"
+  startup_script          = <<-EOT
     set -e
 
     # Create persistent bin directory
@@ -238,7 +266,9 @@ resource "coder_agent" "dev" {
       curl -LsSf https://astral.sh/uv/install.sh | sh || true
     fi
 
-    # Configure Kiro CLI MCP servers (AWS MCP Server + IaC/pricing/serverless/cloudwatch)
+    # Write the Kiro MCP configuration. local.mcp_json is conditional: under
+    # KiroCrew it is the lightweight Coder HTTP MCP server only (heavy uvx servers
+    # crash the crew gateway's startup probe); otherwise it is the AWS MCP servers.
     echo "Configuring Kiro CLI MCP servers..."
 
     # Create user-level MCP configuration
