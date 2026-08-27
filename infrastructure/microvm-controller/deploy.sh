@@ -33,7 +33,8 @@ trust='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Serv
 perms=$(cat <<JSON
 {"Version":"2012-10-17","Statement":[
  {"Effect":"Allow","Action":["lambda:RunMicrovm","lambda:GetMicrovm","lambda:TerminateMicrovm","lambda:ListMicrovms","lambda:SuspendMicrovm","lambda:ResumeMicrovm","lambda:CreateMicrovmAuthToken"],"Resource":"*"},
- {"Effect":"Allow","Action":["iam:PassRole"],"Resource":"${EXEC_ROLE_ARN}","Condition":{"StringEquals":{"iam:PassedToService":"lambda.amazonaws.com"}}},
+ {"Effect":"Allow","Action":["lambda:PassNetworkConnector"],"Resource":"*"},
+ {"Effect":"Allow","Action":["iam:PassRole"],"Resource":"${EXEC_ROLE_ARN}"},
  {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":"arn:aws:s3:::${BUCKET}/coder-microvm-index/*"},
  {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"*"}
 ]}

@@ -65,14 +65,26 @@ def _run(event):
         print("reusing existing microvm %s for workspace %s" % (existing, ws))
         return {"microvm_id": existing, "endpoint": _endpoint(existing)}
 
-    payload = json.dumps({
+    # runHookPayload is capped at 4096 bytes. The base64 Coder agent init script
+    # alone is several KB, so only inline it if the whole payload still fits;
+    # otherwise omit it and let the hook launch the baked `coder agent` binary
+    # with just the token + URL.
+    base = {
         "coder_agent_token": event["coder_agent_token"],
         "coder_agent_url": event["coder_agent_url"],
-        "coder_agent_init_b64": event.get("coder_agent_init_b64", ""),
         "efs_dns": event.get("efs_dns", ""),
         "efs_access_point_id": event.get("efs_access_point_id", ""),
         "home_dir": "/home/coder",
-    })
+    }
+    init = event.get("coder_agent_init_b64", "")
+    payload = json.dumps(base)
+    if init:
+        candidate = json.dumps(dict(base, coder_agent_init_b64=init))
+        if len(candidate.encode("utf-8")) <= 4096:
+            payload = candidate
+        else:
+            print("init script too large for runHookPayload (%d B); "
+                  "falling back to baked `coder agent`." % len(candidate))
     kwargs = {
         "imageIdentifier": event["image_identifier"],
         "executionRoleArn": event["execution_role_arn"],
