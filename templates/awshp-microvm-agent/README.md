@@ -8,10 +8,11 @@ Coder workspace compute lane. It is a simplified, MicroVM-only variant of
 See [`docs/lambda-microvm-mvp-plan.md`](../../docs/lambda-microvm-mvp-plan.md)
 for the full analysis and MVP plan.
 
-> **Status: prototype / not production.** The `aws lambda-microvms` CLI shape is
-> per the AWS docs at time of writing. Flags marked `TODO` in
-> `scripts/microvm_run.sh` (notably `--tags` on `run-microvm`, and the
-> `--resources` / `--run-hook-payload` shapes) need a live-account smoke test.
+> **Status: prototype.** The AWS-side integration has been **validated live** in
+> a commercial region (build → run → HTTPS ingress → `/run` payload unwrap →
+> agent launch) — see [`images/coder-microvm-agent/VALIDATION.md`](../../images/coder-microvm-agent/VALIDATION.md).
+> Still open: wiring the real `coder_agent` token to a live control plane,
+> the EFS in-guest mount, and registering the template in Coder.
 
 ## Why a MicroVM lane (on top of the existing Fargate Firecracker lane)
 
@@ -27,18 +28,22 @@ for the full analysis and MVP plan.
 
 | Constraint | Handling in this template |
 |---|---|
+| **ARM_64 (Graviton) only** | Image built ARM_64; `coder_agent.arch = "arm64"` (validated: X86_64 build is rejected) |
 | **8h max MicroVM lifetime** | `microvm_max_duration_seconds` capped at 28800; ephemeral agent runs only — humans stay on Fargate/Spot |
+| **Single-size image** | Size baked at build (`create-microvm-image --resources`); `run-microvm` takes no `--resources`. CPU/mem inputs imply one image per size (see gaps) |
 | **Commercial regions only (no GovCloud)** | Do not deploy this template in GovCloud; Defense customers keep the Fargate Firecracker lane |
 | **Idle measured by inbound traffic only** | No `idlePolicy` set (agent is outbound-only); stop = terminate. Fast-follow: harness-driven suspend/resume |
+| **`/run` must return 200** | Hook is best-effort; a non-200 terminates the VM |
+| **`/run` payload is wrapped** | Injected token arrives as the string under `runHookPayload`; the hook unwraps it |
 | **Snapshot memory shared across runs** | Agent token injected at run time via the `/run` hook payload, never baked into the image |
 | **No first-class TF resource** | Provisioned via `null_resource` + `aws lambda-microvms` CLI in `scripts/` |
 
 ## Architecture / flow
 
-1. **Image (once):** `images/coder-microvm-agent/` is built into a Firecracker
-   snapshot with `aws lambda-microvms create-microvm-image`
-   (`--additional-os-capabilities '["ALL"]'` for EFS mounts). Bake the agent
-   toolchain in so runs start instantly.
+1. **Image (once):** run `provision-iam.sh` (bucket + build/exec roles), then
+   `build.sh` builds `images/coder-microvm-agent/` into a Firecracker snapshot
+   via `create-microvm-image` (`--additional-os-capabilities '["ALL"]'` for EFS,
+   ARM_64). Bake the agent toolchain in so runs start instantly.
 2. **Start:** the create-time provisioner runs `scripts/microvm_run.sh`, which
    find-or-creates a MicroVM tagged `com.coder.workspace.id`, injects the Coder
    agent token/URL/init script via the `/run` hook payload, and waits for

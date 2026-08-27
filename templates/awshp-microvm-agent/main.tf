@@ -71,8 +71,8 @@ variable "microvm_image_identifier" {
 
 variable "microvm_image_version" {
   type        = string
-  description = "MicroVM image version (major.minor) to run."
-  default     = "1.0"
+  description = "MicroVM image version (major.minor) to run. Empty resolves the ACTIVE version."
+  default     = ""
 }
 
 variable "microvm_execution_role_arn" {
@@ -84,6 +84,11 @@ variable "microvm_egress_connector_arn" {
   type        = string
   description = "Optional VPC_EGRESS network connector ARN so the MicroVM can reach EFS mount targets (2049) and a private coderd. Leave empty to use default public internet egress."
   default     = ""
+}
+
+variable "microvm_state_bucket" {
+  type        = string
+  description = "S3 bucket used to index workspace-id -> microvmId (run-microvm has no tags). Typically the same artifact bucket used to build the image."
 }
 
 variable "efs_file_system_id" {
@@ -155,7 +160,7 @@ data "coder_parameter" "memory" {
 data "coder_parameter" "compute_lane" {
   name         = "Compute Lane"
   display_name = "Compute Lane"
-  description  = "microvm = AWS Lambda MicroVM (Firecracker, snapshot-instant start, suspend/resume, 8h max session). Ephemeral agent runs only; commercial regions only (no GovCloud)."
+  description  = "microvm = AWS Lambda MicroVM (Firecracker/Graviton ARM64, snapshot-instant start, suspend/resume, 8h max session). Ephemeral agent runs only; commercial regions only (no GovCloud)."
   type         = "string"
   default      = "microvm"
   mutable      = false
@@ -207,7 +212,9 @@ resource "coder_env" "openai_api_key" {
 }
 
 resource "coder_agent" "dev" {
-  arch = "amd64"
+  # Lambda MicroVMs currently build/run on ARM_64 (Graviton) ONLY, so the Coder
+  # agent must be arm64. (Validated: X86_64 create-microvm-image is rejected.)
+  arch = "arm64"
   os   = "linux"
 
   display_apps {
@@ -310,12 +317,11 @@ resource "null_resource" "microvm" {
   triggers = {
     workspace_id = data.coder_workspace.me.id
     aws_region   = var.aws_region
+    state_bucket = var.microvm_state_bucket
     # Re-run if any of these change while the workspace is running.
     image        = "${var.microvm_image_identifier}@${var.microvm_image_version}"
     exec_role    = var.microvm_execution_role_arn
     connector    = var.microvm_egress_connector_arn
-    cpu          = data.coder_parameter.cpu.value
-    memory       = data.coder_parameter.memory.value
     max_duration = var.microvm_max_duration_seconds
   }
 
@@ -330,10 +336,9 @@ resource "null_resource" "microvm" {
       CODER_WS_NAME         = data.coder_workspace.me.name
       MICROVM_IMAGE_ID      = var.microvm_image_identifier
       MICROVM_IMAGE_VERSION = var.microvm_image_version
+      MICROVM_STATE_BUCKET  = var.microvm_state_bucket
       MICROVM_EXEC_ROLE     = var.microvm_execution_role_arn
       MICROVM_EGRESS_CONN   = var.microvm_egress_connector_arn
-      MICROVM_CPU           = data.coder_parameter.cpu.value
-      MICROVM_MEM_GB        = data.coder_parameter.memory.value
       MICROVM_MAX_DURATION  = var.microvm_max_duration_seconds
       EFS_DNS               = local.efs_dns
       EFS_ACCESS_POINT_ID   = var.efs_file_system_id == "" ? "" : aws_efs_access_point.home[0].id
@@ -348,9 +353,10 @@ resource "null_resource" "microvm" {
     when    = destroy
     command = "${path.module}/scripts/microvm_terminate.sh"
     environment = {
-      AWS_REGION         = self.triggers.aws_region
-      AWS_DEFAULT_REGION = self.triggers.aws_region
-      CODER_WS_ID        = self.triggers.workspace_id
+      AWS_REGION           = self.triggers.aws_region
+      AWS_DEFAULT_REGION   = self.triggers.aws_region
+      CODER_WS_ID          = self.triggers.workspace_id
+      MICROVM_STATE_BUCKET = self.triggers.state_bucket
     }
   }
 }

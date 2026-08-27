@@ -7,51 +7,45 @@
 # main.tf. All inputs arrive via environment variables (never argv) so the Coder
 # agent token is not exposed in process listings.
 #
-# Idempotency: MicroVMs are tagged com.coder.workspace.id=$CODER_WS_ID. On a
-# workspace restart we reuse an existing non-terminated MicroVM for the same
-# workspace id instead of launching a duplicate.
+# NOTE (validated against the live API): run-microvm has NO --tags and NO
+# --resources. Size is baked into the single-size image at build time. To map a
+# workspace to its MicroVM across start/stop we keep a tiny index object in S3:
+#   s3://$MICROVM_STATE_BUCKET/coder-microvm-index/<workspace-id> -> <microvmId>
+# and use --client-token for run idempotency.
 #
 # The Coder agent token + access URL + init script are handed to the guest via
-# the /run hook payload (written to a 0600 temp file and passed with fileb://,
-# so secrets never hit argv). The in-guest hook server (images/coder-microvm-
-# agent/hooks/hook_server.py) mounts EFS and launches `coder agent`.
-#
-# TODO (live-account validation): confirm exact flag names for the brand-new
-# `aws lambda-microvms` CLI — in particular --tags on run-microvm and the
-# --resources / --run-hook-payload shapes. Adjust once smoke-tested.
+# the /run hook payload (the platform wraps it as {"microvmId","runHookPayload"};
+# the in-guest hook_server.py unwraps runHookPayload). Payload goes through a
+# 0600 temp file via fileb:// so secrets never hit argv.
 ##############################################################################
 set -euo pipefail
 
 log() { printf '[microvm_run] %s\n' "$*" >&2; }
-
-if ! command -v aws >/dev/null 2>&1; then
-  log "ERROR: aws CLI not found on the provisioner. Install it in the Coder provisioner image."
-  exit 1
-fi
+command -v aws >/dev/null 2>&1 || { log "ERROR: aws CLI not found on the provisioner image."; exit 1; }
 
 : "${CODER_WS_ID:?}"; : "${MICROVM_IMAGE_ID:?}"; : "${MICROVM_EXEC_ROLE:?}"
 : "${AWS_REGION:?}"; : "${CODER_AGENT_TOKEN:?}"; : "${CODER_AGENT_URL:?}"
-MICROVM_IMAGE_VERSION="${MICROVM_IMAGE_VERSION:-1.0}"
+: "${MICROVM_STATE_BUCKET:?set MICROVM_STATE_BUCKET (S3) for the workspace->microvm index}"
+MICROVM_IMAGE_VERSION="${MICROVM_IMAGE_VERSION:-}"   # empty => resolve ACTIVE version
 MICROVM_MAX_DURATION="${MICROVM_MAX_DURATION:-28800}"
-MICROVM_CPU="${MICROVM_CPU:-4}"
-MICROVM_MEM_GB="${MICROVM_MEM_GB:-8}"
+INDEX_KEY="coder-microvm-index/${CODER_WS_ID}"
+INDEX_URI="s3://${MICROVM_STATE_BUCKET}/${INDEX_KEY}"
 
-# --- 1. Reuse an existing MicroVM for this workspace, if any ----------------
-# (list-microvms + client-side filter on the workspace tag; the exact query API
-# may differ — adjust after smoke test.)
-existing="$(aws lambda-microvms list-microvms --region "$AWS_REGION" \
-  --query "microvms[?tags.\"com.coder.workspace.id\"=='${CODER_WS_ID}' && state!='TERMINATED'].microvmId | [0]" \
-  --output text 2>/dev/null || echo "None")"
+microvm_state() { aws lambda-microvms get-microvm --region "$AWS_REGION" --microvm-identifier "$1" --query 'state' --output text 2>/dev/null || echo "MISSING"; }
 
-if [ -n "$existing" ] && [ "$existing" != "None" ]; then
-  log "Reusing existing MicroVM $existing for workspace $CODER_WS_ID"
-  echo "$existing"
-  exit 0
+# --- 1. Reuse an existing MicroVM for this workspace, if the index points at a
+#        still-live one ---------------------------------------------------------
+existing="$(aws s3 cp "$INDEX_URI" - --region "$AWS_REGION" 2>/dev/null || true)"
+if [ -n "${existing:-}" ]; then
+  st="$(microvm_state "$existing")"
+  case "$st" in
+    RUNNING|SUSPENDED|PENDING) log "Reusing MicroVM $existing (state=$st)"; echo "$existing"; exit 0 ;;
+    *) log "Indexed MicroVM $existing is $st; launching a fresh one." ;;
+  esac
 fi
 
 # --- 2. Build the /run hook payload (secrets -> 0600 temp file) -------------
-payload_file="$(mktemp)"
-chmod 600 "$payload_file"
+payload_file="$(mktemp)"; chmod 600 "$payload_file"
 trap 'rm -f "$payload_file"' EXIT
 cat > "$payload_file" <<JSON
 {
@@ -64,50 +58,38 @@ cat > "$payload_file" <<JSON
 }
 JSON
 
-# --- 3. Assemble run-microvm args -------------------------------------------
-# NOTE: no --idle-policy on purpose. MicroVM idle is measured by INBOUND proxy
-# traffic only; the Coder agent connects OUTBOUND over the tailnet and would be
-# misread as idle. MVP maps workspace stop -> terminate. (Fast-follow: drive
-# suspend/resume from the harness on task state.)
+# --- 3. run-microvm ----------------------------------------------------------
+# No --idle-policy: MicroVM idle is measured by INBOUND proxy traffic, but the
+# Coder agent connects OUTBOUND, so it would be misread as idle. MVP maps
+# workspace stop -> terminate. (Fast-follow: harness-driven suspend/resume.)
 args=(
   --region "$AWS_REGION"
   --image-identifier "$MICROVM_IMAGE_ID"
-  --image-version "$MICROVM_IMAGE_VERSION"
   --execution-role-arn "$MICROVM_EXEC_ROLE"
   --maximum-duration-in-seconds "$MICROVM_MAX_DURATION"
-  --resources "[{\"minimumVcpus\":${MICROVM_CPU},\"minimumMemoryInMiB\":$((MICROVM_MEM_GB * 1024))}]"
   --run-hook-payload "fileb://${payload_file}"
-  --tags "com.coder.workspace.id=${CODER_WS_ID},com.coder.workspace.name=${CODER_WS_NAME:-unknown}"
+  --client-token "coder-${CODER_WS_ID}"
+  --logging "{\"cloudWatch\":{\"logGroup\":\"/aws/lambda-microvms/coder-microvm-agent\"}}"
 )
+[ -n "$MICROVM_IMAGE_VERSION" ] && args+=(--image-version "$MICROVM_IMAGE_VERSION")
+[ -n "${MICROVM_EGRESS_CONN:-}" ] && args+=(--egress-network-connectors "[\"${MICROVM_EGRESS_CONN}\"]")
 
-# VPC egress connector (reach EFS mount targets on 2049 and/or a private coderd).
-if [ -n "${MICROVM_EGRESS_CONN:-}" ]; then
-  args+=(--egress-network-connectors "[\"${MICROVM_EGRESS_CONN}\"]")
-fi
-
-log "Launching MicroVM for workspace ${CODER_WS_ID} (${MICROVM_CPU} vCPU / ${MICROVM_MEM_GB} GB, max ${MICROVM_MAX_DURATION}s)"
+log "Launching MicroVM for workspace ${CODER_WS_ID}"
 run_json="$(aws lambda-microvms run-microvm "${args[@]}")"
+microvm_id="$(printf '%s' "$run_json" | jq -r '.microvmId')"
+[ -n "$microvm_id" ] && [ "$microvm_id" != "null" ] || { log "ERROR: no microvmId in: $run_json"; exit 1; }
 
-microvm_id="$(printf '%s' "$run_json" | (command -v jq >/dev/null && jq -r '.microvmId' || sed -n 's/.*"microvmId"[: ]*"\([^"]*\)".*/\1/p'))"
-endpoint="$(printf '%s' "$run_json"  | (command -v jq >/dev/null && jq -r '.endpoint // empty' || true))"
+# Record the mapping so stop/delete can find it (no tags on run-microvm).
+printf '%s' "$microvm_id" | aws s3 cp - "$INDEX_URI" --region "$AWS_REGION" >/dev/null
+log "MicroVM ${microvm_id} launched; indexed at ${INDEX_URI}"
 
-if [ -z "${microvm_id:-}" ] || [ "$microvm_id" = "null" ]; then
-  log "ERROR: run-microvm did not return a microvmId. Response was: $run_json"
-  exit 1
-fi
-
-log "MicroVM ${microvm_id} launched. endpoint=${endpoint:-<none>}"
-
-# --- 4. Wait for RUNNING (the /run hook launches the Coder agent) -----------
+# --- 4. Wait for RUNNING (readiness is best determined by connecting, but the
+#        state check is enough to unblock the Coder build) --------------------
 for _ in $(seq 1 60); do
-  state="$(aws lambda-microvms get-microvm --region "$AWS_REGION" \
-    --microvm-identifier "$microvm_id" --query 'state' --output text 2>/dev/null || echo '')"
-  case "$state" in
-    RUNNING)      log "MicroVM ${microvm_id} is RUNNING."; echo "$microvm_id"; exit 0 ;;
-    TERMINATING|TERMINATED) log "ERROR: MicroVM entered ${state} before RUNNING (check /run hook)."; exit 1 ;;
-    *)            sleep 5 ;;
+  case "$(microvm_state "$microvm_id")" in
+    RUNNING) log "MicroVM ${microvm_id} is RUNNING."; echo "$microvm_id"; exit 0 ;;
+    TERMINATING|TERMINATED) log "ERROR: entered terminal state before RUNNING (check /run hook)."; exit 1 ;;
+    *) sleep 5 ;;
   esac
 done
-
-log "ERROR: timed out waiting for MicroVM ${microvm_id} to reach RUNNING."
-exit 1
+log "ERROR: timed out waiting for ${microvm_id} to reach RUNNING."; exit 1
