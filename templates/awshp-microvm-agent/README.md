@@ -8,11 +8,28 @@ Coder workspace compute lane. It is a simplified, MicroVM-only variant of
 See [`docs/lambda-microvm-mvp-plan.md`](../../docs/lambda-microvm-mvp-plan.md)
 for the full analysis and MVP plan.
 
-> **Status: prototype.** The AWS-side integration has been **validated live** in
-> a commercial region (build → run → HTTPS ingress → `/run` payload unwrap →
-> agent launch) — see [`images/coder-microvm-agent/VALIDATION.md`](../../images/coder-microvm-agent/VALIDATION.md).
-> Still open: wiring the real `coder_agent` token to a live control plane,
-> the EFS in-guest mount, and registering the template in Coder.
+> **Status: prototype.** The AWS-side integration is **validated live** in a
+> commercial region, now via a **controller Lambda** (no aws CLI on the Coder
+> provisioner) — build → run → HTTPS ingress → `/run` payload unwrap → agent
+> launch, plus idempotent reuse and terminate. See
+> [`images/coder-microvm-agent/VALIDATION.md`](../../images/coder-microvm-agent/VALIDATION.md).
+> Still open: a real agent connection to the control plane and the EFS in-guest mount.
+
+## Provisioning approach (no aws CLI on the provisioner)
+
+The Coder provisioner image has no `aws` CLI, so the template does **not** shell
+out. Instead it invokes a small **controller Lambda**
+([`infrastructure/microvm-controller`](../../infrastructure/microvm-controller))
+via the Terraform `aws_lambda_invocation` resource with `lifecycle_scope =
+"CRUD"`: Terraform calls it on create/update (run or reuse the workspace's
+MicroVM) and on destroy (terminate it). The provisioner needs only the AWS
+provider (already authenticated) + `lambda:InvokeFunction` on the controller.
+The controller uses boto3 to call `lambda-microvms` and keeps the
+workspace-id → microvmId index in S3.
+
+> The `scripts/` dir (`microvm_run.sh` / `microvm_terminate.sh`) is retained as
+> an alternative for deployments that run an **external provisioner WITH the aws
+> CLI**; this template uses the Lambda path.
 
 ## Why a MicroVM lane (on top of the existing Fargate Firecracker lane)
 
@@ -44,10 +61,10 @@ for the full analysis and MVP plan.
    `build.sh` builds `images/coder-microvm-agent/` into a Firecracker snapshot
    via `create-microvm-image` (`--additional-os-capabilities '["ALL"]'` for EFS,
    ARM_64). Bake the agent toolchain in so runs start instantly.
-2. **Start:** the create-time provisioner runs `scripts/microvm_run.sh`, which
-   find-or-creates a MicroVM tagged `com.coder.workspace.id`, injects the Coder
-   agent token/URL/init script via the `/run` hook payload, and waits for
-   `RUNNING`.
+2. **Start:** the create-time `aws_lambda_invocation` calls the controller,
+   which find-or-runs the workspace's MicroVM, injects the Coder agent
+   token/URL/init via the `/run` hook payload, and returns `microvm_id` +
+   `endpoint`.
 3. **Inside the MicroVM:** `hooks/hook_server.py` handles `/run` — mounts the
    per-workspace EFS access point at `/home/coder` and launches `coder agent`,
    which dials **out** to coderd over the tailnet (no inbound required).
@@ -55,8 +72,9 @@ for the full analysis and MVP plan.
    calls to Bedrock/openai-compat over egress, governed by the AI Governance
    Add-On — identical to the K8s templates. Direct AWS/Bedrock calls use the
    MicroVM `executionRoleArn` (replaces EKS IRSA).
-5. **Stop/delete:** the destroy-time provisioner runs
-   `scripts/microvm_terminate.sh`, terminating the workspace's MicroVM(s) by tag.
+5. **Stop/delete:** the destroy-scoped `aws_lambda_invocation` (`tf.action =
+   delete`) calls the controller, which terminates the workspace's MicroVM
+   (looked up via the S3 index).
 
 ## Prerequisites (per deployment)
 

@@ -45,13 +45,18 @@ terraform {
     }
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.0"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = ">= 3.2"
+      version = ">= 5.44"
     }
   }
+}
+
+# The AWS provider is used to (a) manage the per-workspace EFS access point and
+# (b) invoke the coder-microvm-controller Lambda. Credentials come from the
+# Coder provisioner's environment (the same identity the K8s templates use to
+# create aws_efs_access_point). The provisioner needs lambda:InvokeFunction on
+# the controller — it does NOT need the aws CLI.
+provider "aws" {
+  region = var.aws_region
 }
 
 ##############################################################################
@@ -84,6 +89,12 @@ variable "microvm_egress_connector_arn" {
   type        = string
   description = "Optional VPC_EGRESS network connector ARN so the MicroVM can reach EFS mount targets (2049) and a private coderd. Leave empty to use default public internet egress."
   default     = ""
+}
+
+variable "microvm_controller_function" {
+  type        = string
+  description = "Name (or ARN) of the coder-microvm-controller Lambda that runs/terminates the MicroVM (see infrastructure/microvm-controller). Invoked by Terraform so the provisioner needs NO aws CLI."
+  default     = "coder-microvm-controller"
 }
 
 variable "microvm_state_bucket" {
@@ -300,74 +311,60 @@ resource "aws_efs_access_point" "home" {
 ##############################################################################
 # The MicroVM itself.
 #
-# No first-class Terraform resource exists for lambda-microvms yet, so we drive
-# the API from a null_resource gated on start_count (mirrors how the K8s
-# templates gate the Deployment): create-time provisioner runs the MicroVM,
-# destroy-time provisioner terminates it. Identifiers needed at destroy time are
-# carried in `triggers` (destroy provisioners may only read self.*).
+# No first-class Terraform resource exists for lambda-microvms, and the Coder
+# provisioner has no aws CLI. So instead of a null_resource + local-exec, we
+# invoke the coder-microvm-controller Lambda via `aws_lambda_invocation` with
+# `lifecycle_scope = "CRUD"`: Terraform calls it on create/update (run or reuse
+# the workspace's MicroVM) and on destroy (terminate it), injecting a `tf.action`
+# the controller switches on. This needs only the AWS provider (already
+# authenticated) + lambda:InvokeFunction — NO CLI, NO boto3 on the provisioner.
 #
-# The Coder agent token, access URL, and init script are passed to the run
-# script via provisioner ENV (never argv, so they do not appear in `ps`), which
-# forwards them to the MicroVM through the /run hook payload.
+# The controller uses boto3 to call lambda-microvms and maintains the
+# workspace-id -> microvmId index in S3 (run-microvm has no tags). The Coder
+# agent token/URL/init script are passed in the invocation input (sensitive,
+# stored in state) and forwarded to the guest via the /run hook payload.
+#
+# NB: the scripts/ dir (microvm_run.sh / microvm_terminate.sh) is retained as an
+# alternative for deployments that prefer an EXTERNAL provisioner WITH the aws
+# CLI; this template uses the Lambda path.
 ##############################################################################
 
-resource "null_resource" "microvm" {
-  count = data.coder_workspace.me.start_count
+resource "aws_lambda_invocation" "microvm" {
+  count           = data.coder_workspace.me.start_count
+  function_name   = var.microvm_controller_function
+  lifecycle_scope = "CRUD" # invoke on create/update AND destroy (tf.action)
 
-  triggers = {
-    workspace_id = data.coder_workspace.me.id
-    aws_region   = var.aws_region
-    state_bucket = var.microvm_state_bucket
-    # Re-run if any of these change while the workspace is running.
-    image        = "${var.microvm_image_identifier}@${var.microvm_image_version}"
-    exec_role    = var.microvm_execution_role_arn
-    connector    = var.microvm_egress_connector_arn
-    max_duration = var.microvm_max_duration_seconds
-  }
+  input = jsonencode({
+    workspace_id         = data.coder_workspace.me.id
+    state_bucket         = var.microvm_state_bucket
+    image_identifier     = var.microvm_image_identifier
+    image_version        = var.microvm_image_version
+    execution_role_arn   = var.microvm_execution_role_arn
+    egress_connector_arn = var.microvm_egress_connector_arn
+    max_duration         = var.microvm_max_duration_seconds
+    efs_dns              = local.efs_dns
+    efs_access_point_id  = var.efs_file_system_id == "" ? "" : aws_efs_access_point.home[0].id
+    coder_agent_token    = coder_agent.dev.token
+    coder_agent_url      = data.coder_workspace.me.access_url
+    coder_agent_init_b64 = base64encode(coder_agent.dev.init_script)
+  })
+}
 
-  # ---- START: run (or find) the MicroVM for this workspace ----
-  provisioner "local-exec" {
-    when    = create
-    command = "${path.module}/scripts/microvm_run.sh"
-    environment = {
-      AWS_REGION            = var.aws_region
-      AWS_DEFAULT_REGION    = var.aws_region
-      CODER_WS_ID           = data.coder_workspace.me.id
-      CODER_WS_NAME         = data.coder_workspace.me.name
-      MICROVM_IMAGE_ID      = var.microvm_image_identifier
-      MICROVM_IMAGE_VERSION = var.microvm_image_version
-      MICROVM_STATE_BUCKET  = var.microvm_state_bucket
-      MICROVM_EXEC_ROLE     = var.microvm_execution_role_arn
-      MICROVM_EGRESS_CONN   = var.microvm_egress_connector_arn
-      MICROVM_MAX_DURATION  = var.microvm_max_duration_seconds
-      EFS_DNS               = local.efs_dns
-      EFS_ACCESS_POINT_ID   = var.efs_file_system_id == "" ? "" : aws_efs_access_point.home[0].id
-      CODER_AGENT_TOKEN     = coder_agent.dev.token
-      CODER_AGENT_URL       = data.coder_workspace.me.access_url
-      CODER_AGENT_INIT_B64  = base64encode(coder_agent.dev.init_script)
-    }
-  }
-
-  # ---- STOP/DELETE: terminate the workspace's MicroVM(s) ----
-  provisioner "local-exec" {
-    when    = destroy
-    command = "${path.module}/scripts/microvm_terminate.sh"
-    environment = {
-      AWS_REGION           = self.triggers.aws_region
-      AWS_DEFAULT_REGION   = self.triggers.aws_region
-      CODER_WS_ID          = self.triggers.workspace_id
-      MICROVM_STATE_BUCKET = self.triggers.state_bucket
-    }
-  }
+locals {
+  microvm_result = try(jsondecode(aws_lambda_invocation.microvm[0].result), {})
 }
 
 resource "coder_metadata" "microvm_info" {
   count       = data.coder_workspace.me.start_count
-  resource_id = null_resource.microvm[0].id
+  resource_id = aws_lambda_invocation.microvm[0].id
   daily_cost  = local.cost
   item {
     key   = "compute"
-    value = "AWS Lambda MicroVM (Firecracker)"
+    value = "AWS Lambda MicroVM (Firecracker/Graviton)"
+  }
+  item {
+    key   = "microvm id"
+    value = try(local.microvm_result.microvm_id, "n/a")
   }
   item {
     key   = "region"

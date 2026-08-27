@@ -69,6 +69,51 @@ Concretely, against image `coder-microvm-agent` v5.0:
 - `coder-microvm-exec-role` (same trust; Bedrock invoke + logs + EFS) — this is
   the workspace's AWS identity inside the MicroVM, replacing EKS IRSA.
 
+## Update: no-CLI provisioning via a controller Lambda (validated)
+
+The Coder provisioner image has **no `aws` CLI**, so the original
+`null_resource` + `local-exec` path fails at build with `aws CLI not found`.
+Replaced it with a **controller Lambda** (`infrastructure/microvm-controller`)
+invoked from Terraform via `aws_lambda_invocation` (`lifecycle_scope = "CRUD"`).
+Provisioner needs only the AWS provider + `lambda:InvokeFunction` — no CLI/boto3.
+
+Validated live (invoking the deployed `coder-microvm-controller`):
+- create → `{"microvm_id":"microvm-…","endpoint":"…"}`, reached `RUNNING`.
+- idempotent 2nd create → **same** microvm_id (S3 index reuse).
+- ingress `curl` → HTTP 200 `{"status":"ok","agent_started":true}` (token
+  injected through the Lambda → run-hook path).
+- delete → `{"terminated":"microvm-…"}`, VM terminated.
+
+### IAM findings (important)
+
+The `lambda-microvms` **API endpoint/CLI** is `lambda-microvms`, but the **IAM
+action namespace is `lambda:`** (this is why a role with `lambda:*` can call it).
+The controller role needs, at minimum:
+- `lambda:RunMicrovm`, `lambda:GetMicrovm`, `lambda:TerminateMicrovm`,
+  `lambda:ListMicrovms` (+ `Suspend/ResumeMicrovm`, `CreateMicrovmAuthToken`).
+- **`iam:PassRole`** on the MicroVM execution role (no `PassedToService`
+  condition — the MicroVM service principal is not `lambda.amazonaws.com`).
+- **`lambda:PassNetworkConnector`** on the egress connector — even the DEFAULT
+  `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:INTERNET_EGRESS`
+  when no custom connector is supplied.
+- `RunMicrovm` authorizes against **multiple resources at once** (image AND
+  connector); grant all the above or it denies one resource at a time.
+
+The provisioner’s ability to invoke the controller is granted by a **resource-
+based policy** on the function (`add-permission --principal <account-id>`), so it
+works regardless of the coderd provisioner’s identity-based policy.
+
+### Deploy the controller
+
+```bash
+cd infrastructure/microvm-controller
+AWS_REGION=us-east-1 \
+  BUCKET=coder-microvm-artifacts-<acct>-us-east-1 \
+  EXEC_ROLE_ARN=arn:aws:iam::<acct>:role/coder-microvm-exec-role \
+  ./deploy.sh
+# then set microvm_controller_function=coder-microvm-controller in the template.
+```
+
 ## Known gaps / not yet validated
 
 - **Coder agent did not connect to a real control plane** in the test (a dummy
