@@ -42,6 +42,7 @@ BASE = "/aws/lambda-microvms/runtime/v1"
 
 _state = {"agent_started": False}
 _last_run = {"body_len": None, "body_head": "", "keys": [], "headers": {}}
+AGENT_LOG = "/tmp/coder-agent.log"
 _lock = threading.Lock()
 
 
@@ -78,14 +79,32 @@ def _launch_agent(payload):
     env["CODER_AGENT_TOKEN"] = token
     env["CODER_AGENT_URL"] = url
     try:
+        logf = open(AGENT_LOG, "ab", buffering=0)
         if init_b64:
             # Run the exact init script Coder generated (parity with the K8s
-            # template's `command = init_script`); it execs `coder agent`, which
-            # dials OUT to coderd over the tailnet.
+            # template's `command = init_script`); it downloads the
+            # server-matched agent and execs `coder agent`.
             script = base64.b64decode(init_b64).decode()
-            subprocess.Popen(["sh", "-c", script], env=env)
+            subprocess.Popen(["sh", "-c", script], env=env, stdout=logf, stderr=logf)
         else:
-            subprocess.Popen(["coder", "agent"], env=env)
+            # IMPORTANT: the agent binary must match the server's RPC API
+            # version. A baked agent that is newer than the server fails the
+            # handshake ('Unknown or unsupported API version'). So download the
+            # SERVER-MATCHED agent from <access_url>/bin/coder-linux-arm64 (this
+            # is what Coder's init script does) and fall back to the baked
+            # binary only if the download fails.
+            base = url.rstrip("/")
+            dl = ('curl -fsSL "%s/bin/coder-linux-arm64" -o /tmp/coder-agent-bin '
+                  '&& chmod +x /tmp/coder-agent-bin') % base
+            agent_bin = "coder"
+            try:
+                subprocess.run(["sh", "-c", dl], check=True, timeout=90,
+                               stdout=logf, stderr=logf)
+                agent_bin = "/tmp/coder-agent-bin"
+                print("[hook] downloaded server-matched agent from %s/bin" % base)
+            except Exception as exc:  # noqa: BLE001
+                print("[hook] WARN: agent download failed (%r); using baked coder" % exc)
+            subprocess.Popen([agent_bin, "agent"], env=env, stdout=logf, stderr=logf)
         with _lock:
             _state["agent_started"] = True
         print("[hook] Coder agent launched (outbound tailnet).")
@@ -111,8 +130,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         # Health endpoint (also used for the ingress smoke test).
-        if self.path.rstrip("/") == "/debug/run":
+        path = self.path.split("?", 1)[0].rstrip("/")
+        if path == "/debug/run":
             self._reply(200, _last_run)
+            return
+        if path == "/debug/agent":
+            # PROTOTYPE debug: tail the launched agent's stdout/stderr.
+            try:
+                with open(AGENT_LOG, "rb") as fh:
+                    tail = fh.read()[-4000:].decode("utf-8", "replace")
+            except FileNotFoundError:
+                tail = "(no agent log yet)"
+            self._reply(200, {"agent_started": _state["agent_started"], "log_tail": tail})
+            return
+        if path == "/debug/exec":
+            # PROTOTYPE debug ONLY: run a shell command passed as ?c=<base64>.
+            # Reachable only with a valid MicroVM proxy auth token. Remove before
+            # any non-prototype use.
+            import urllib.parse
+            q = urllib.parse.urlparse(self.path).query
+            c = urllib.parse.parse_qs(q).get("c", [""])[0]
+            try:
+                cmd = base64.b64decode(c).decode() if c else "echo no-cmd"
+                out = subprocess.run(["sh", "-c", cmd], capture_output=True,
+                                     timeout=25, text=True)
+                self._reply(200, {"cmd": cmd, "rc": out.returncode,
+                                  "stdout": out.stdout[-3000:], "stderr": out.stderr[-3000:]})
+            except Exception as exc:  # noqa: BLE001
+                self._reply(200, {"error": repr(exc)})
             return
         self._reply(200, {"status": "ok", "agent_started": _state["agent_started"]})
 

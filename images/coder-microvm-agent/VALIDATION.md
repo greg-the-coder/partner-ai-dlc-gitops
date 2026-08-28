@@ -114,6 +114,48 @@ AWS_REGION=us-east-1 \
 # then set microvm_controller_function=coder-microvm-controller in the template.
 ```
 
+## Update: agent must match the server version (validated)
+
+Direct workspace tests surfaced two more issues, both fixed in `hooks/hook_server.py`:
+
+1. **`runHookPayload` is capped at 4096 bytes** — the base64 Coder init script
+   overflows it. The controller now inlines the init script only if it fits,
+   else the hook launches the agent itself (below).
+2. **Agent/server version skew** — the baked agent (v2.36.3, RPC API **2.10**)
+   is rejected by the server (v2.34.4, RPC **2.9**):
+   `400 Unknown or unsupported API version — server is at version 2.9, behind
+   requested minor version 2.10`. Fix: the hook downloads the **server-matched**
+   agent from `${CODER_AGENT_URL}/bin/coder-linux-arm64` (what Coder’s init
+   script does) instead of using the baked binary.
+
+After both fixes, a fresh workspace (`coder create`) reaches:
+`dev (linux, arm64) ⦿ connected ✔ healthy v2.34.4` — the MicroVM agent connects
+to the control plane and reports healthy. **Validated via the authenticated
+coder CLI.**
+
+### Remaining: SSH/data-plane needs DERP WebSocket mode (deployment setting)
+
+`coder ssh`/`coder ping` to the MicroVM time out even though the agent is
+healthy. In-guest agent logs show the tailnet DERP client getting **HTTP 426**
+from `partner.coderdemo.io`:
+`DERP server returned status 426 (a proxy could be disallowing 'Upgrade: derp')`.
+The MicroVM reaches coderd through the public CloudFront/ALB, which strips the
+raw `Upgrade: derp` header, so only the WebSocket DERP fallback works and the
+WireGuard handshake to peers doesn’t complete.
+
+This is a **deployment-level** matter (affects any client reaching coderd through
+that proxy), not a template bug. Fix: set **`CODER_DERP_FORCE_WEBSOCKETS=true`**
+on coderd (already present, commented out, in
+`infrastructure/helm/coder-values.yaml`) so the DERP map advertises WebSocket
+mode to all agents and clients.
+
+### Debug endpoints (prototype only)
+
+`hooks/hook_server.py` exposes `GET /debug/run`, `/debug/agent` (agent log tail),
+and `/debug/exec?c=<base64>` (reachable only with a valid MicroVM proxy auth
+token). These were invaluable for the above diagnosis but **must be removed or
+gated before any non-prototype use.**
+
 ## Known gaps / not yet validated
 
 - **Coder agent did not connect to a real control plane** in the test (a dummy
