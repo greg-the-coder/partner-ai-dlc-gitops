@@ -93,6 +93,14 @@ coder:
     value: "false"
   - name: CODER_DERP_SERVER_ENABLE
     value: "true"
+  # coderd sits behind CloudFront/ALB which strips the raw `Upgrade: derp`
+  # header (DERP returns HTTP 426), breaking the classic DERP data-plane for
+  # clients reaching coderd through the proxy (e.g. Lambda MicroVM workspaces via
+  # public egress). Force the DERP map to advertise WebSocket mode so agents and
+  # clients relay over WebSockets and coder ssh/apps work. Validated with the
+  # awshp-microvm-agent template.
+  - name: CODER_DERP_FORCE_WEBSOCKETS
+    value: "true"
 
   # Telemetery and prometheus metric config
   #- name: CODER_TELEMETRY_ENABLE
