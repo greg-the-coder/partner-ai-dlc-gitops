@@ -21,6 +21,7 @@ Returns (create/update): {"microvm_id": "...", "endpoint": "..."}
 Returns (delete):        {"terminated": "<id or ''>"}
 """
 import json
+import uuid
 import boto3
 
 s3 = boto3.client("s3")
@@ -90,8 +91,12 @@ def _run(event):
         "executionRoleArn": event["execution_role_arn"],
         "maximumDurationInSeconds": int(event.get("max_duration", 28800)),
         "runHookPayload": payload,
-        # Idempotency guard for retries within the dedup window.
-        "clientToken": ("coder-" + ws)[:64],
+        # Unique per run attempt. A FIXED per-workspace token breaks restarts:
+        # AWS rejects a reused clientToken whose request params changed (Coder
+        # rotates the agent token each start) with 'The provided clientToken was
+        # used with different request parameters.' Duplicate-VM prevention for a
+        # workspace is handled by the S3 index reuse above, not by clientToken.
+        "clientToken": str(uuid.uuid4()),
     }
     if event.get("image_version"):
         kwargs["imageVersion"] = event["image_version"]
