@@ -13,6 +13,9 @@
 #   BEDROCK_MODEL             - primary/default model id
 #   BEDROCK_SMALL_FAST_MODEL  - small/fast model id
 #   BEDROCK_MANTLE_KEY        - Mantle (OpenAI-compat) API key    (required)
+#   MCP_KNOWLEDGE_SLUG        - AWS Knowledge MCP server slug     (default aws-knowledge)
+#   MCP_KNOWLEDGE_URL         - AWS Knowledge MCP server endpoint (default knowledge-mcp.global.api.aws)
+#   MCP_KNOWLEDGE_AVAIL       - availability policy               (default default_on)
 #
 set -euo pipefail
 
@@ -49,6 +52,11 @@ export TF_VAR_bedrock_mantle_endpoint="${BEDROCK_MANTLE_ENDPOINT:-https://bedroc
 export TF_VAR_bedrock_model="${BEDROCK_MODEL:-global.anthropic.claude-opus-4-6-v1}"
 export TF_VAR_bedrock_small_fast_model="${BEDROCK_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}"
 export TF_VAR_bedrock_mantle_api_key="${BEDROCK_MANTLE_KEY:-}"
+
+# Coder Agents MCP server (AWS Knowledge) — overridable, with sensible defaults.
+export TF_VAR_mcp_knowledge_slug="${MCP_KNOWLEDGE_SLUG:-aws-knowledge}"
+export TF_VAR_mcp_knowledge_url="${MCP_KNOWLEDGE_URL:-https://knowledge-mcp.global.api.aws}"
+export TF_VAR_mcp_knowledge_availability="${MCP_KNOWLEDGE_AVAIL:-default_on}"
 
 terraform init -input=false
 

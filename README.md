@@ -250,7 +250,7 @@ used by the Fargate templates:
    - `CoderAdminEmail`, `CoderAdminUser`, `CoderAdminPassword`, `CoderAdminName`
 3. Optional parameters (defaults shown):
    - `EKSClusterName` (`coder-aws-cluster`) — **use the same value as Step 1**,
-     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.36.0`),
+     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.37.0`),
      `CoderLicenseKey` (empty by default — supply a **Coder Premium** license JWT to enable
      premium features such as HA/multi-replica `coderd`; it is applied automatically at
      deploy via `coder licenses add`), `CoderGitOpsTemplateRepoURL`, `RetryFlag` (`False`)

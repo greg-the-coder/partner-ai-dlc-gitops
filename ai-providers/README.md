@@ -10,13 +10,20 @@ CloudFormation deploy script used to make against:
 ## Why Terraform instead of API calls
 
 The [`coderd`](https://registry.terraform.io/providers/coder/coderd) provider
-(**≥ 0.0.23**) added first-class resources for the AI Gateway:
+(**≥ 0.0.25** for Coder v2.37; the resources were introduced in 0.0.23) provides
+first-class resources for the AI Gateway:
 
 | Resource | Replaces |
 |----------|----------|
 | `coderd_ai_provider` | `POST/PATCH /api/v2/ai/providers` |
 | `coderd_agents_model` | `POST /api/experimental/chats/model-configs` |
-| `coderd_default_agents_model` | the `is_default: true` flag on a model |
+| `coderd_agents_default_model` | the `is_default: true` flag on a model |
+
+> **Coder 2.37 / coderd 0.0.25 upgrade.** The default-model resource was renamed
+> `coderd_default_agents_model` → `coderd_agents_default_model` and now requires
+> `organization_id` (resolved here via the `coderd_organization` data source).
+> `coderd_ai_provider` and `coderd_agents_model` are otherwise unchanged for this
+> config.
 
 Benefits over the raw API calls:
 
@@ -32,7 +39,7 @@ Benefits over the raw API calls:
 
 ## Requirements
 
-- **Coder v2.36.0+** on the server (AI Gateway resources).
+- **Coder v2.37.0+** on the server (Coder Agents GA) with the **coderd provider ≥ 0.0.25**.
 - **Terraform ≥ 1.11** on the client — the provider uses *write-only arguments*
   (`api_key_wo`, `settings.bedrock.*_wo`). The wrapper script auto-installs a
   compatible Terraform if the runner's version is older.
@@ -48,7 +55,7 @@ Benefits over the raw API calls:
 
 | Model (`coderd_agents_model`) | Provider | Default |
 |---|---|---|
-| Claude Opus 4.6 | bedrock | ✅ (`coderd_default_agents_model`) |
+| Claude Opus 4.6 | bedrock | ✅ (`coderd_agents_default_model`) |
 | Claude Haiku 4.5 | bedrock | |
 | OpenAI gpt-oss-120b | openai-compat | |
 | Devstral 2 123B | openai-compat | |
@@ -83,39 +90,42 @@ terraform apply
 CodeBuild deploy step (after creating the Bedrock Mantle service credential),
 in place of the previous `curl` provider/model calls.
 
-## Coder Agents MCP servers (`ai_mcp_servers_gitops.sh`)
+## Coder Agents MCP servers (`coderd_agents_mcp_server`)
 
 Coder Agents can be given external **MCP servers** (AI Settings > Coder Agents >
-MCP servers, `/ai/settings/mcp-servers`). Unlike providers/models, the `coderd`
-Terraform provider (0.0.23) has **no resource** for these, so registration is a
-direct, idempotent admin-API call — mirroring how the AI providers were wired
-*before* the Terraform resources existed:
+MCP servers, `/ai/settings/mcp-servers`). As of coderd **≥ 0.0.25** (Coder 2.37)
+these are a first-class Terraform resource, so they are managed declaratively in
+`ai_providers.tf` alongside the providers and models — no separate script. (This
+replaced the former `ai_mcp_servers_gitops.sh`, which made a direct
+`POST /api/v2/organizations/{org}/mcp-servers` admin-API call.)
 
-```
-POST /api/v2/organizations/{org}/mcp-servers   (CreateMCPServerConfigRequest)
-```
-
-`ai_mcp_servers_gitops.sh <session-token>` registers the **AWS Knowledge MCP
-Server** — a remote, AWS-hosted, no-install/no-credentials server exposing AWS
-docs, API references, What's New, Builder Center, and Well-Architected guidance
-(ideal for Citizen Developers/Builders):
+The `coderd_agents_mcp_server.aws_knowledge` resource registers the **AWS
+Knowledge MCP Server** — a remote, AWS-hosted, no-install/no-credentials server
+exposing AWS docs, API references, What's New, Builder Center, and
+Well-Architected guidance (ideal for Citizen Developers/Builders):
 
 | Field | Value |
 |---|---|
 | `display_name` | `AWS Knowledge` |
-| `slug` | `aws-knowledge` (override via `MCP_KNOWLEDGE_SLUG`) |
+| `slug` | `aws-knowledge` (var `mcp_knowledge_slug`, env `MCP_KNOWLEDGE_SLUG`) |
 | `transport` | `streamable_http` |
-| `url` | `https://knowledge-mcp.global.api.aws` (override via `MCP_KNOWLEDGE_URL`) |
+| `url` | `https://knowledge-mcp.global.api.aws` (var `mcp_knowledge_url`, env `MCP_KNOWLEDGE_URL`) |
 | `auth_type` | `none` |
-| `availability` | `default_on` (override via `MCP_KNOWLEDGE_AVAIL`) |
+| `availability` | `default_on` (var `mcp_knowledge_availability`, env `MCP_KNOWLEDGE_AVAIL`) |
 | `model_intent` | `true` (surfaces each tool call's purpose in Coder AI Session logs) |
 
-The script is **best-effort and always exits 0**: it no-ops (HTTP 404) on Coder
-versions without the MCP-servers API and never fails a deploy. The buildspec
-invokes it right after `ai_providers_gitops.sh` (guarded with `|| true`).
+Because it is now Terraform, the apply is idempotent (state-reconciled by slug)
+and `coderd_agents_mcp_server` also exposes governance not available via the raw
+API call: `tool_allow_list` / `tool_deny_list`, `allow_in_plan_mode`,
+`forward_coder_headers`, and write-only auth args (`api_key_value_wo`,
+`oauth2_client_secret_wo`, `custom_headers_wo`) for authenticated servers.
+coderd 0.0.25 also adds `coderd_agents_system_prompt` for setting the Coder
+Agents system prompt declaratively (not configured here).
 
-> **Requires Coder 2.36+ with the AI Governance Add-On.** The MCP-servers API
-> does not exist on earlier versions (the script detects this and skips).
-> This differs from the workspace-level MCP servers in the templates (Kiro /
-> Claude Code `mcp.json`): those are per-workspace tools for the CLI assistants,
-> whereas this registers a server for the server-side **Coder Agents** chat.
+> **Requires Coder v2.37.0+ with the AI Governance Add-On.** Unlike the former
+> best-effort script (which no-op'd on deployments without the MCP-servers API),
+> the Terraform apply will fail if the API/add-on is absent — acceptable now that
+> 2.37 GA is the deploy target. This differs from the workspace-level MCP servers
+> in the templates (Kiro / Claude Code `mcp.json`): those are per-workspace tools
+> for the CLI assistants, whereas this registers a server for the server-side
+> **Coder Agents** chat.

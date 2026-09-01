@@ -2,7 +2,7 @@
 """
 partner-coder-wizard — GenAI-assisted install of the Partner AI-DLC Coder demo on AWS.
 
-Deploys Coder 2.36.0 on EKS Auto Mode with two workspace compute lanes
+Deploys Coder 2.37.0 on EKS Auto Mode with two workspace compute lanes
 (AWS Fargate + EC2 Spot NodePool) and EFS-backed home directories, from the
 greg-the-coder/partner-ai-dlc-gitops CloudFormation stacks.
 
@@ -39,7 +39,7 @@ from coder_wizard import preflight, deploy, validate, cost_estimate, summary, dr
 DEFAULT_GIT_REPO   = "https://github.com/greg-the-coder/partner-ai-dlc-gitops.git"
 DEFAULT_CLUSTER    = "coder-aws-cluster"
 DEFAULT_K8S        = "1.35"
-DEFAULT_CODER_VER  = "2.36.0"
+DEFAULT_CODER_VER  = "2.37.0"
 
 
 # ---------------------------------------------------------------------------

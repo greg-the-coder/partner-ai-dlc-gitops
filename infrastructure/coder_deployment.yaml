@@ -9,7 +9,7 @@ Parameters:
   CoderVersion:
     Description: Coder version
     Type: String
-    Default: "2.36.0"
+    Default: "2.37.0"
 
   EKSClusterName:
     Description: Name of EKS Cluster
@@ -1243,14 +1243,7 @@ Resources:
                         export BEDROCK_MANTLE_KEY
 
                         ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
-                        echo "=== AI Provider Configuration Complete ==="
-
-                        # Register Coder Agents MCP servers (AWS Knowledge). No coderd
-                        # Terraform resource exists for these, so this is a direct,
-                        # idempotent admin-API call. Best-effort: no-ops on Coder
-                        # versions without the MCP-servers API and never fails the build.
-                        ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_mcp_servers_gitops.sh "$CODER_SESSION_TOKEN" ) || true
-                        echo "=== Coder Agents MCP Configuration Complete ==="
+                        echo "=== AI Provider + Agents MCP Configuration Complete ==="
                       else
                         CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CoderSessionTokenSecretArn" --query SecretString --output text)
                         echo "Session token received successfully"
