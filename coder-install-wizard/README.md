@@ -1,7 +1,7 @@
 # Partner Demo — Coder Install Wizard
 
 A GenAI-assisted CLI that guides you through a **Blue/Green install** of the
-Partner AI-DLC demo platform — [Coder](https://coder.com) **2.36.0** on Amazon EKS
+Partner AI-DLC demo platform — [Coder](https://coder.com) **2.37.0** on Amazon EKS
 (Auto Mode) — into your own AWS account, using the
 [`partner-ai-dlc-gitops`](https://github.com/greg-the-coder/partner-ai-dlc-gitops)
 CloudFormation stacks.
@@ -30,7 +30,7 @@ It replaces the manual two-stack README process with:
 
 | Capability | Detail |
 |---|---|
-| Coder control plane | **v2.36.0**, HA (2 replicas) when a Premium license is provided |
+| Coder control plane | **v2.37.0**, HA (2 replicas) when a Premium license is provided |
 | Compute lane 1 — **Fargate** | EKS Fargate profile `coder-workspaces`; pods labelled `compute=fargate`; Firecracker microVM isolation |
 | Compute lane 2 — **EC2 Spot** | EKS Auto Mode Spot NodePool `coder-ws-spot`; pods opt in via the template **Compute Lane** parameter; auto-scaled, scale-to-zero |
 | Storage standard | **Amazon EFS** per-workspace access point mounted at `/home/coder` in **both** lanes |
@@ -90,7 +90,7 @@ partner-coder-wizard cost --developers 25 --spot-fraction 40 --region us-east-1
 partner-coder-wizard deploy \
   --region us-east-1 \
   --cluster coder-aws-cluster \
-  --coder-version 2.36.0 \
+  --coder-version 2.37.0 \
   --admin-email ops@example.com \
   --admin-user admin \
   --admin-name "Platform Team" \
@@ -127,7 +127,7 @@ The wizard captures the CloudFormation inputs teams change most often:
 |---|---|---|
 | AWS region | (deploy region) | current AWS CLI region |
 | EKS cluster name | `EKSClusterName` | `coder-aws-cluster` |
-| Coder version | `CoderVersion` | `2.36.0` |
+| Coder version | `CoderVersion` | `2.37.0` |
 | Kubernetes version | `KubernetesVersion` | `1.35` |
 | Admin email / user / full name | `CoderAdminEmail` / `CoderAdminUser` / `CoderAdminName` | `admin@example.com` / `admin` / `Coder Admin` |
 | Admin password | `CoderAdminPassword` | auto-generated → Secrets Manager |
@@ -290,6 +290,6 @@ coder_wizard/
 ## Roadmap
 
 - [ ] Query live Bedrock token consumption post-install for actual AI spend
-- [ ] Detect running Coder version and offer an in-place upgrade path (e.g. 2.34 → 2.36)
+- [ ] Detect running Coder version and offer an in-place upgrade path (e.g. 2.36 → 2.37)
 - [ ] Per-lane cost breakdown from real instance-type Spot prices
 - [ ] Uninstall wizard with ordered resource cleanup (Blue/Green teardown of the old stack)

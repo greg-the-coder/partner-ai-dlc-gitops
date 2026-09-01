@@ -10,13 +10,20 @@ CloudFormation deploy script used to make against:
 ## Why Terraform instead of API calls
 
 The [`coderd`](https://registry.terraform.io/providers/coder/coderd) provider
-(**≥ 0.0.23**) added first-class resources for the AI Gateway:
+(**≥ 0.0.25** for Coder v2.37; the resources were introduced in 0.0.23) provides
+first-class resources for the AI Gateway:
 
 | Resource | Replaces |
 |----------|----------|
 | `coderd_ai_provider` | `POST/PATCH /api/v2/ai/providers` |
 | `coderd_agents_model` | `POST /api/experimental/chats/model-configs` |
-| `coderd_default_agents_model` | the `is_default: true` flag on a model |
+| `coderd_agents_default_model` | the `is_default: true` flag on a model |
+
+> **Coder 2.37 / coderd 0.0.25 upgrade.** The default-model resource was renamed
+> `coderd_default_agents_model` → `coderd_agents_default_model` and now requires
+> `organization_id` (resolved here via the `coderd_organization` data source).
+> `coderd_ai_provider` and `coderd_agents_model` are otherwise unchanged for this
+> config.
 
 Benefits over the raw API calls:
 
@@ -32,7 +39,7 @@ Benefits over the raw API calls:
 
 ## Requirements
 
-- **Coder v2.36.0+** on the server (AI Gateway resources).
+- **Coder v2.37.0+** on the server (Coder Agents GA) with the **coderd provider ≥ 0.0.25**.
 - **Terraform ≥ 1.11** on the client — the provider uses *write-only arguments*
   (`api_key_wo`, `settings.bedrock.*_wo`). The wrapper script auto-installs a
   compatible Terraform if the runner's version is older.
@@ -48,7 +55,7 @@ Benefits over the raw API calls:
 
 | Model (`coderd_agents_model`) | Provider | Default |
 |---|---|---|
-| Claude Opus 4.6 | bedrock | ✅ (`coderd_default_agents_model`) |
+| Claude Opus 4.6 | bedrock | ✅ (`coderd_agents_default_model`) |
 | Claude Haiku 4.5 | bedrock | |
 | OpenAI gpt-oss-120b | openai-compat | |
 | Devstral 2 123B | openai-compat | |
@@ -86,10 +93,12 @@ in place of the previous `curl` provider/model calls.
 ## Coder Agents MCP servers (`ai_mcp_servers_gitops.sh`)
 
 Coder Agents can be given external **MCP servers** (AI Settings > Coder Agents >
-MCP servers, `/ai/settings/mcp-servers`). Unlike providers/models, the `coderd`
-Terraform provider (0.0.23) has **no resource** for these, so registration is a
-direct, idempotent admin-API call — mirroring how the AI providers were wired
-*before* the Terraform resources existed:
+MCP servers, `/ai/settings/mcp-servers`). This script predates a Terraform
+resource for them and uses a direct, idempotent admin-API call — mirroring how
+the AI providers were wired *before* the Terraform resources existed. (coderd
+≥ 0.0.25 adds `coderd_agents_mcp_server` and `coderd_agents_system_prompt`, so
+this can be migrated to Terraform later; the API call stays portable and
+best-effort for now.)
 
 ```
 POST /api/v2/organizations/{org}/mcp-servers   (CreateMCPServerConfigRequest)

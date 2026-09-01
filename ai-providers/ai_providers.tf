@@ -4,15 +4,26 @@
 # Declarative replacement for the direct Coder API calls in the CloudFormation
 # CodeBuild deploy script (curl to /api/v2/ai/providers and
 # /api/experimental/chats/model-configs). Managed with the Coder `coderd`
-# Terraform provider (>= 0.0.23), which added first-class resources for the
+# Terraform provider (>= 0.0.25 for Coder 2.37; the AI Gateway resources were
+# introduced in 0.0.23), which provides first-class resources for the
 # AI Gateway:
 #
 #   coderd_ai_provider          -> AI Gateway providers  (bedrock, openai-compat)
 #   coderd_agents_model         -> Coder Agents chat models
-#   coderd_default_agents_model -> the default agent model
+#   coderd_agents_default_model -> the default agent model
 #
-# Requires Coder v2.36.0+ on the server side and Terraform >= 1.11 on the client
-# (the provider uses write-only arguments, e.g. api_key_wo / *_wo credentials).
+# Requires Coder v2.37.0+ (Coder Agents GA) on the server side with the coderd
+# provider >= 0.0.25, and Terraform >= 1.11 on the client (write-only
+# arguments, e.g. api_key_wo / *_wo credentials).
+#
+# 2.37 / coderd 0.0.25 compatibility notes:
+#   * The default-model resource was renamed
+#     coderd_default_agents_model -> coderd_agents_default_model and now
+#     requires organization_id (looked up via the coderd_organization data
+#     source below).
+#   * coderd_ai_provider and coderd_agents_model are otherwise unchanged for
+#     this config (settings.bedrock.{region,model,small_fast_model}, api_key_wo,
+#     model_config all still valid; new optional attrs are ignored here).
 ###########################################################
 
 terraform {
@@ -21,7 +32,7 @@ terraform {
   required_providers {
     coderd = {
       source  = "coder/coderd"
-      version = ">= 0.0.23"
+      version = ">= 0.0.25"
     }
   }
 }
@@ -93,6 +104,12 @@ variable "bedrock_mantle_api_key_version" {
 provider "coderd" {
   url   = var.coder_url
   token = var.coder_token
+}
+
+# The AI Gateway model resources are organization-scoped in coderd >= 0.0.25
+# (Coder 2.37 / Agents GA). Look up the default org so we never hard-code an ID.
+data "coderd_organization" "default" {
+  is_default = true
 }
 
 # --------------------------------------------------------------------------
@@ -194,6 +211,9 @@ resource "coderd_agents_model" "devstral2" {
 }
 
 # Default agent model (was is_default:true on the Opus model config).
-resource "coderd_default_agents_model" "default" {
-  model_id = coderd_agents_model.claude_opus.id
+# coderd >= 0.0.25 renamed this resource (coderd_default_agents_model ->
+# coderd_agents_default_model) and now requires organization_id.
+resource "coderd_agents_default_model" "default" {
+  model_id        = coderd_agents_model.claude_opus.id
+  organization_id = data.coderd_organization.default.id
 }
