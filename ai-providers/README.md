@@ -90,41 +90,42 @@ terraform apply
 CodeBuild deploy step (after creating the Bedrock Mantle service credential),
 in place of the previous `curl` provider/model calls.
 
-## Coder Agents MCP servers (`ai_mcp_servers_gitops.sh`)
+## Coder Agents MCP servers (`coderd_agents_mcp_server`)
 
 Coder Agents can be given external **MCP servers** (AI Settings > Coder Agents >
-MCP servers, `/ai/settings/mcp-servers`). This script predates a Terraform
-resource for them and uses a direct, idempotent admin-API call — mirroring how
-the AI providers were wired *before* the Terraform resources existed. (coderd
-≥ 0.0.25 adds `coderd_agents_mcp_server` and `coderd_agents_system_prompt`, so
-this can be migrated to Terraform later; the API call stays portable and
-best-effort for now.)
+MCP servers, `/ai/settings/mcp-servers`). As of coderd **≥ 0.0.25** (Coder 2.37)
+these are a first-class Terraform resource, so they are managed declaratively in
+`ai_providers.tf` alongside the providers and models — no separate script. (This
+replaced the former `ai_mcp_servers_gitops.sh`, which made a direct
+`POST /api/v2/organizations/{org}/mcp-servers` admin-API call.)
 
-```
-POST /api/v2/organizations/{org}/mcp-servers   (CreateMCPServerConfigRequest)
-```
-
-`ai_mcp_servers_gitops.sh <session-token>` registers the **AWS Knowledge MCP
-Server** — a remote, AWS-hosted, no-install/no-credentials server exposing AWS
-docs, API references, What's New, Builder Center, and Well-Architected guidance
-(ideal for Citizen Developers/Builders):
+The `coderd_agents_mcp_server.aws_knowledge` resource registers the **AWS
+Knowledge MCP Server** — a remote, AWS-hosted, no-install/no-credentials server
+exposing AWS docs, API references, What's New, Builder Center, and
+Well-Architected guidance (ideal for Citizen Developers/Builders):
 
 | Field | Value |
 |---|---|
 | `display_name` | `AWS Knowledge` |
-| `slug` | `aws-knowledge` (override via `MCP_KNOWLEDGE_SLUG`) |
+| `slug` | `aws-knowledge` (var `mcp_knowledge_slug`, env `MCP_KNOWLEDGE_SLUG`) |
 | `transport` | `streamable_http` |
-| `url` | `https://knowledge-mcp.global.api.aws` (override via `MCP_KNOWLEDGE_URL`) |
+| `url` | `https://knowledge-mcp.global.api.aws` (var `mcp_knowledge_url`, env `MCP_KNOWLEDGE_URL`) |
 | `auth_type` | `none` |
-| `availability` | `default_on` (override via `MCP_KNOWLEDGE_AVAIL`) |
+| `availability` | `default_on` (var `mcp_knowledge_availability`, env `MCP_KNOWLEDGE_AVAIL`) |
 | `model_intent` | `true` (surfaces each tool call's purpose in Coder AI Session logs) |
 
-The script is **best-effort and always exits 0**: it no-ops (HTTP 404) on Coder
-versions without the MCP-servers API and never fails a deploy. The buildspec
-invokes it right after `ai_providers_gitops.sh` (guarded with `|| true`).
+Because it is now Terraform, the apply is idempotent (state-reconciled by slug)
+and `coderd_agents_mcp_server` also exposes governance not available via the raw
+API call: `tool_allow_list` / `tool_deny_list`, `allow_in_plan_mode`,
+`forward_coder_headers`, and write-only auth args (`api_key_value_wo`,
+`oauth2_client_secret_wo`, `custom_headers_wo`) for authenticated servers.
+coderd 0.0.25 also adds `coderd_agents_system_prompt` for setting the Coder
+Agents system prompt declaratively (not configured here).
 
-> **Requires Coder 2.36+ with the AI Governance Add-On.** The MCP-servers API
-> does not exist on earlier versions (the script detects this and skips).
-> This differs from the workspace-level MCP servers in the templates (Kiro /
-> Claude Code `mcp.json`): those are per-workspace tools for the CLI assistants,
-> whereas this registers a server for the server-side **Coder Agents** chat.
+> **Requires Coder v2.37.0+ with the AI Governance Add-On.** Unlike the former
+> best-effort script (which no-op'd on deployments without the MCP-servers API),
+> the Terraform apply will fail if the API/add-on is absent — acceptable now that
+> 2.37 GA is the deploy target. This differs from the workspace-level MCP servers
+> in the templates (Kiro / Claude Code `mcp.json`): those are per-workspace tools
+> for the CLI assistants, whereas this registers a server for the server-side
+> **Coder Agents** chat.

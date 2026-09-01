@@ -2,8 +2,9 @@
 # Coder AI Gateway — Providers & Agent Models (GitOps)
 #
 # Declarative replacement for the direct Coder API calls in the CloudFormation
-# CodeBuild deploy script (curl to /api/v2/ai/providers and
-# /api/experimental/chats/model-configs). Managed with the Coder `coderd`
+# CodeBuild deploy script (curl to /api/v2/ai/providers,
+# /api/experimental/chats/model-configs, and
+# /api/v2/organizations/{org}/mcp-servers). Managed with the Coder `coderd`
 # Terraform provider (>= 0.0.25 for Coder 2.37; the AI Gateway resources were
 # introduced in 0.0.23), which provides first-class resources for the
 # AI Gateway:
@@ -11,6 +12,7 @@
 #   coderd_ai_provider          -> AI Gateway providers  (bedrock, openai-compat)
 #   coderd_agents_model         -> Coder Agents chat models
 #   coderd_agents_default_model -> the default agent model
+#   coderd_agents_mcp_server    -> Coder Agents external MCP servers
 #
 # Requires Coder v2.37.0+ (Coder Agents GA) on the server side with the coderd
 # provider >= 0.0.25, and Terraform >= 1.11 on the client (write-only
@@ -95,6 +97,26 @@ variable "bedrock_mantle_api_key_version" {
   type        = number
   description = "Bump to rotate the Bedrock Mantle API key (write-only argument version)."
   default     = 1
+}
+
+# --- Coder Agents MCP servers (AWS Knowledge) --------------------------------
+
+variable "mcp_knowledge_slug" {
+  type        = string
+  description = "Organization-unique slug for the AWS Knowledge MCP server."
+  default     = "aws-knowledge"
+}
+
+variable "mcp_knowledge_url" {
+  type        = string
+  description = "Endpoint for the AWS Knowledge MCP server (remote, streamable HTTP)."
+  default     = "https://knowledge-mcp.global.api.aws"
+}
+
+variable "mcp_knowledge_availability" {
+  type        = string
+  description = "Availability policy for the AWS Knowledge MCP server: force_on | default_on | default_off."
+  default     = "default_on"
 }
 
 # --------------------------------------------------------------------------
@@ -216,4 +238,30 @@ resource "coderd_agents_model" "devstral2" {
 resource "coderd_agents_default_model" "default" {
   model_id        = coderd_agents_model.claude_opus.id
   organization_id = data.coderd_organization.default.id
+}
+
+# --------------------------------------------------------------------------
+# Coder Agents MCP servers
+# --------------------------------------------------------------------------
+
+# The AWS Knowledge MCP Server: a remote, fully-managed, AWS-hosted MCP server
+# (no install, no credentials) exposing AWS docs, API references, What's New,
+# Builder Center, and Well-Architected guidance -- ideal for Citizen
+# Developers/Builders. Replaces the former ai_mcp_servers_gitops.sh direct
+# admin-API call, now that coderd >= 0.0.25 provides a first-class resource
+# (coderd_agents_mcp_server). Requires Coder v2.37.0+ with the AI Governance
+# Add-On (the MCP-servers API).
+# https://github.com/awslabs/mcp/tree/main/src/aws-knowledge-mcp-server
+resource "coderd_agents_mcp_server" "aws_knowledge" {
+  organization_id = data.coderd_organization.default.id
+  display_name    = "AWS Knowledge"
+  slug            = var.mcp_knowledge_slug
+  url             = var.mcp_knowledge_url
+  description     = "AWS-hosted MCP server: docs, API refs, What's New, Builder Center, and Well-Architected guidance."
+  icon_url        = "/icon/aws.png"
+  transport       = "streamable_http"
+  auth_type       = "none"
+  availability    = var.mcp_knowledge_availability
+  enabled         = true
+  model_intent    = true
 }
