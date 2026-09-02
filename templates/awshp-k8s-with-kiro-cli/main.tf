@@ -92,7 +92,7 @@ locals {
     }
     "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
-      args    = ["awslabs.aws-iac-mcp-server==1.0.24"]
+      args    = ["awslabs.aws-iac-mcp-server==1.0.25"]
       env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
     "awslabs-aws-pricing-mcp-server" = {
