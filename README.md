@@ -18,7 +18,8 @@ CloudFormation stack. Two capabilities are the focus of this platform:
   privileged workloads. Home directories stay on Amazon EFS, so storage is identical across
   both lanes; the lane is chosen per workspace via the **Compute Lane** template parameter.
 - **Coder Agents** — the built-in agentic coding assistant, wired to Amazon Bedrock (native)
-  and Bedrock Mantle (OpenAI-compatible) so agents run entirely on AWS-hosted models.
+  and its OpenAI-compatible endpoint (`bedrock-runtime/openai/v1`) so agents run entirely on
+  AWS-hosted models.
 
 See [Deployment](#deployment) to run it in your own AWS account.
 
@@ -141,15 +142,16 @@ console clicks required). Two AI providers are provisioned:
 | Provider (name) | Type | Endpoint | Models |
 |----------|------|----------|--------|
 | `bedrock` ("AWS Bedrock") | Bedrock (native, Pod Identity IAM) | `bedrock-runtime.us-east-1` | Claude Opus 4.6 (default), Claude Haiku 4.5 (small/fast) |
-| `openai-compat` ("OpenAI via AWS Bedrock") | OpenAI-compatible (Bedrock Mantle) | `bedrock-mantle.us-east-1` | OpenAI gpt-oss-120b, Devstral 2 123B |
+| `openai-compat` ("OpenAI-compatible (AWS Bedrock)") | OpenAI-compatible (Bedrock native OpenAI endpoint) | `bedrock-runtime.us-east-1/openai/v1` | OpenAI GPT-5.6 Sol, xAI Grok 4.6 |
 
 Notes:
-- Anthropic models use global cross-region inference profile IDs and are served from
-  **us-east-1**, independent of the stack's deployment region.
+- Anthropic, OpenAI, and xAI models use cross-region inference profile IDs (`global.`/`us.`)
+  and are served from **us-east-1**, independent of the stack's deployment region.
 - Native Bedrock credentials come from the workspace/`coderd` pod IAM role (EKS Pod
   Identity), so no static access keys are stored for the `bedrock` provider.
-- The Bedrock Mantle (OpenAI-compatible) API key is generated automatically from an IAM
-  service-specific credential and stored in Secrets Manager.
+- The OpenAI-compatible provider authenticates with an **Amazon Bedrock API key** (a
+  `bedrock.amazonaws.com` IAM service-specific credential) generated automatically and
+  stored in Secrets Manager.
 - Provider and model configuration is applied declaratively by the
   [`ai-providers/`](./ai-providers) Terraform (the `coderd` provider) during the CodeBuild
   deploy step, replacing the earlier direct `/api/v2/ai/providers` and
@@ -302,8 +304,8 @@ terraform apply -auto-approve
 - **EFS** — persistent workspace home directories (Fargate-compatible). Uses
   `DeletionPolicy: Retain` so a stack rollback/delete never destroys home dirs.
 - **ECR** — three `coder-workspace-*` repositories holding the Fargate workspace images built by the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml)
-- **Secrets Manager** — admin password, session token, Bedrock Mantle API key
-- **IAM** — `<cluster>-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.), where `<cluster>` is `EKSClusterName` so multiple environments can coexist in one account
+- **Secrets Manager** — admin password, session token, Amazon Bedrock API key
+- **IAM** — `<cluster>-workshop-user` workspace role (Bedrock, S3, Secrets Manager, EKS, EFS, etc.), where `<cluster>` is `EKSClusterName` so multiple environments can coexist in one account
 
 ## Troubleshooting
 
@@ -314,7 +316,7 @@ terraform apply -auto-approve
 | Workspace won't start | Fargate profile is `ACTIVE`; `kubectl get sc` shows `efs-static`; EFS mount targets healthy; `kubectl get pvc -n coder-ws` |
 | Spot-lane workspace stuck `Pending` | `kubectl get nodepool coder-ws-spot`; confirm EKS Auto Mode can launch Spot capacity in the AZs; pod carries the `coder.workspace/lane=spot` toleration; Spot capacity available for the requested instance types |
 | Workspace image pull error / `ImagePullBackOff` | Step 1 image pipeline ran successfully; each `<EKSClusterName>/coder-workspace-*` ECR repo has a `latest` image; `EKSClusterName` and Region match between both stacks |
-| Coder Agent model errors | Bedrock model access in us-east-1; provider config via `/api/v2/ai/providers`; Bedrock Mantle secret populated |
+| Coder Agent model errors | Bedrock model access in us-east-1; provider config via `/api/v2/ai/providers`; Amazon Bedrock API key secret populated |
 
 ## Cleanup
 

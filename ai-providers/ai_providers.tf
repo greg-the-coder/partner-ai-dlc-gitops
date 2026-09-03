@@ -161,11 +161,10 @@ resource "coderd_ai_provider" "bedrock" {
 # OpenAI-compatible provider served by Amazon Bedrock's native OpenAI endpoint
 # (https://bedrock-runtime.<region>.amazonaws.com/openai/v1), authenticated with
 # an Amazon Bedrock API key (a bedrock.amazonaws.com IAM service-specific
-# credential, passed as a write-only bearer key). This replaces the earlier
-# Bedrock Mantle endpoint: the native /openai/v1 route serves the current OpenAI
-# (gpt-5.6-*), Mistral (devstral) and xAI (grok) models via Chat Completions.
-# Cross-region (CRIS) models must be referenced by their us./global. inference
-# profile id (see the models below).
+# credential, passed as a write-only bearer key). The native /openai/v1 route
+# serves the configured OpenAI (GPT-5.6 Sol) and xAI (Grok 4.6) models via Chat
+# Completions; cross-region (CRIS) models are referenced by their us./global.
+# inference-profile id (see the models below).
 resource "coderd_ai_provider" "openai_compat" {
   name         = "openai-compat"
   type         = "openai"
@@ -218,8 +217,8 @@ resource "coderd_agents_model" "claude_haiku" {
 
 # OpenAI-compatible models on the bedrock-runtime /openai/v1 provider. GPT-5.6
 # Sol and Grok 4.6 are cross-region (CRIS) models, so they MUST be referenced by
-# their us./global. inference-profile id; Devstral 2 is ON_DEMAND (bare id).
-# context_limit / max_output_tokens are conservative and tunable.
+# their us./global. inference-profile id. context_limit / max_output_tokens are
+# conservative and tunable.
 resource "coderd_agents_model" "gpt_5_6_sol" {
   ai_provider_id = coderd_ai_provider.openai_compat.id
   model          = "us.openai.gpt-5.6-sol"
@@ -228,17 +227,6 @@ resource "coderd_agents_model" "gpt_5_6_sol" {
   context_limit  = 400000
   model_config = jsonencode({
     max_output_tokens = 128000
-  })
-}
-
-resource "coderd_agents_model" "devstral2" {
-  ai_provider_id = coderd_ai_provider.openai_compat.id
-  model          = "mistral.devstral-2-123b"
-  display_name   = "Devstral 2 123B"
-  enabled        = true
-  context_limit  = 256000
-  model_config = jsonencode({
-    max_output_tokens = 16000
   })
 }
 

@@ -58,7 +58,6 @@ Benefits over the raw API calls:
 | Claude Opus 4.6 | bedrock | ✅ (`coderd_agents_default_model`) |
 | Claude Haiku 4.5 | bedrock | |
 | OpenAI GPT-5.6 Sol (`us.openai.gpt-5.6-sol`) | openai-compat | |
-| Devstral 2 123B (`mistral.devstral-2-123b`) | openai-compat | |
 | xAI Grok 4.6 (`us.xai.grok-4.6`) | openai-compat | |
 
 ## Usage (mirrors `templates/templates_gitops.sh`)
