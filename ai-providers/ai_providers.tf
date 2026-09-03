@@ -68,10 +68,10 @@ variable "bedrock_endpoint" {
   default     = "https://bedrock-runtime.us-east-1.amazonaws.com"
 }
 
-variable "bedrock_mantle_endpoint" {
+variable "bedrock_openai_endpoint" {
   type        = string
-  description = "Base URL for the OpenAI-compatible Bedrock Mantle provider."
-  default     = "https://bedrock-mantle.us-east-1.api.aws/v1"
+  description = "Base URL for the OpenAI-compatible provider: Bedrock runtime native OpenAI endpoint (/openai/v1)."
+  default     = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
 }
 
 variable "bedrock_model" {
@@ -86,16 +86,16 @@ variable "bedrock_small_fast_model" {
   default     = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
-variable "bedrock_mantle_api_key" {
+variable "bedrock_openai_api_key" {
   type        = string
-  description = "Bedrock Mantle (OpenAI-compatible) API key — an IAM service-specific credential from Secrets Manager."
+  description = "Amazon Bedrock API key (bearer, ABSK...) — a bedrock.amazonaws.com IAM service-specific credential from Secrets Manager, valid for the bedrock-runtime OpenAI-compatible endpoint (/openai/v1)."
   default     = ""
   sensitive   = true
 }
 
-variable "bedrock_mantle_api_key_version" {
+variable "bedrock_openai_api_key_version" {
   type        = number
-  description = "Bump to rotate the Bedrock Mantle API key (write-only argument version)."
+  description = "Bump to rotate the Bedrock API key (write-only argument version)."
   default     = 1
 }
 
@@ -158,17 +158,23 @@ resource "coderd_ai_provider" "bedrock" {
   }
 }
 
-# OpenAI-compatible endpoint served by Bedrock Mantle, authenticated with an
-# IAM service-specific credential (write-only api key).
+# OpenAI-compatible provider served by Amazon Bedrock's native OpenAI endpoint
+# (https://bedrock-runtime.<region>.amazonaws.com/openai/v1), authenticated with
+# an Amazon Bedrock API key (a bedrock.amazonaws.com IAM service-specific
+# credential, passed as a write-only bearer key). This replaces the earlier
+# Bedrock Mantle endpoint: the native /openai/v1 route serves the current OpenAI
+# (gpt-5.6-*), Mistral (devstral) and xAI (grok) models via Chat Completions.
+# Cross-region (CRIS) models must be referenced by their us./global. inference
+# profile id (see the models below).
 resource "coderd_ai_provider" "openai_compat" {
   name         = "openai-compat"
   type         = "openai"
-  display_name = "OpenAI via AWS Bedrock"
-  base_url     = var.bedrock_mantle_endpoint
+  display_name = "OpenAI-compatible (AWS Bedrock)"
+  base_url     = var.bedrock_openai_endpoint
   enabled      = true
 
-  api_key_wo         = var.bedrock_mantle_api_key
-  api_key_wo_version = var.bedrock_mantle_api_key_version
+  api_key_wo         = var.bedrock_openai_api_key
+  api_key_wo_version = var.bedrock_openai_api_key_version
 }
 
 # --------------------------------------------------------------------------
@@ -210,14 +216,18 @@ resource "coderd_agents_model" "claude_haiku" {
   })
 }
 
-resource "coderd_agents_model" "gpt_oss_120b" {
+# OpenAI-compatible models on the bedrock-runtime /openai/v1 provider. GPT-5.6
+# Sol and Grok 4.6 are cross-region (CRIS) models, so they MUST be referenced by
+# their us./global. inference-profile id; Devstral 2 is ON_DEMAND (bare id).
+# context_limit / max_output_tokens are conservative and tunable.
+resource "coderd_agents_model" "gpt_5_6_sol" {
   ai_provider_id = coderd_ai_provider.openai_compat.id
-  model          = "openai.gpt-oss-120b"
-  display_name   = "OpenAI gpt-oss-120b"
+  model          = "us.openai.gpt-5.6-sol"
+  display_name   = "OpenAI GPT-5.6 Sol"
   enabled        = true
-  context_limit  = 128000
+  context_limit  = 400000
   model_config = jsonencode({
-    max_output_tokens = 8192
+    max_output_tokens = 128000
   })
 }
 
@@ -226,9 +236,22 @@ resource "coderd_agents_model" "devstral2" {
   model          = "mistral.devstral-2-123b"
   display_name   = "Devstral 2 123B"
   enabled        = true
-  context_limit  = 128000
+  context_limit  = 256000
   model_config = jsonencode({
-    max_output_tokens = 8192
+    max_output_tokens = 16000
+  })
+}
+
+# xAI Grok 4.6 (SpaceX AI). Reasoning model — reserve generous output headroom
+# (small max_output_tokens gets consumed by reasoning and returns empty content).
+resource "coderd_agents_model" "grok_4_6" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "us.xai.grok-4.6"
+  display_name   = "xAI Grok 4.6"
+  enabled        = true
+  context_limit  = 256000
+  model_config = jsonencode({
+    max_output_tokens = 32000
   })
 }
 

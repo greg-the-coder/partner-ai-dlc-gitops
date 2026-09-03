@@ -34,7 +34,7 @@ Benefits over the raw API calls:
   `anthropic.effort` field that the raw API silently dropped.)
 - **No provider-ID plumbing** — models reference `coderd_ai_provider.bedrock.id`
   directly instead of curling the provider back to read its `id`.
-- **Secrets as write-only args** — the Bedrock Mantle API key is passed via the
+- **Secrets as write-only args** — the Amazon Bedrock API key is passed via the
   write-only `api_key_wo` argument (never stored in state).
 
 ## Requirements
@@ -51,14 +51,15 @@ Benefits over the raw API calls:
 | Provider (`coderd_ai_provider`) | Type | Notes |
 |---|---|---|
 | `bedrock` | `bedrock` | Native Bedrock; credentials via EKS Pod Identity (no static keys). Routes `model` + `small_fast_model`. |
-| `openai-compat` | `openai` | Bedrock Mantle (OpenAI-compatible); authenticated with a write-only API key. |
+| `openai-compat` | `openai` | Amazon Bedrock **native OpenAI endpoint** (`bedrock-runtime/openai/v1`); authenticated with a write-only Amazon Bedrock API key. |
 
 | Model (`coderd_agents_model`) | Provider | Default |
 |---|---|---|
 | Claude Opus 4.6 | bedrock | ✅ (`coderd_agents_default_model`) |
 | Claude Haiku 4.5 | bedrock | |
-| OpenAI gpt-oss-120b | openai-compat | |
-| Devstral 2 123B | openai-compat | |
+| OpenAI GPT-5.6 Sol (`us.openai.gpt-5.6-sol`) | openai-compat | |
+| Devstral 2 123B (`mistral.devstral-2-123b`) | openai-compat | |
+| xAI Grok 4.6 (`us.xai.grok-4.6`) | openai-compat | |
 
 ## Usage (mirrors `templates/templates_gitops.sh`)
 
@@ -67,7 +68,7 @@ Run from this directory with the Coder session token as the first argument:
 ```bash
 export CODER_AGENT_URL="https://<your-coder-url>"
 export BEDROCK_REGION="us-east-1"
-export BEDROCK_MANTLE_KEY="<mantle-service-credential>"   # from Secrets Manager
+export BEDROCK_OPENAI_KEY="<amazon-bedrock-api-key>"   # ABSK... from Secrets Manager
 ./ai_providers_gitops.sh "<coder-session-token>"
 ```
 
@@ -79,7 +80,7 @@ The wrapper maps the environment to `TF_VAR_*`, ensures Terraform ≥ 1.11, and 
 ```bash
 export TF_VAR_coder_url="https://<your-coder-url>"
 export TF_VAR_coder_token="<session-token>"
-export TF_VAR_bedrock_mantle_api_key="<mantle-key>"
+export TF_VAR_bedrock_openai_api_key="<amazon-bedrock-api-key>"
 terraform init
 terraform apply
 ```
@@ -87,7 +88,7 @@ terraform apply
 ## CloudFormation integration
 
 `infrastructure/coder_deployment.yaml` invokes `ai_providers_gitops.sh` in the
-CodeBuild deploy step (after creating the Bedrock Mantle service credential),
+CodeBuild deploy step (after creating the Amazon Bedrock API key),
 in place of the previous `curl` provider/model calls.
 
 ## Coder Agents MCP servers (`coderd_agents_mcp_server`)

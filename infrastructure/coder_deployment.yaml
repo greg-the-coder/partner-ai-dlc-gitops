@@ -366,28 +366,25 @@ Resources:
                   - bedrock:Converse
                   - bedrock:ConverseStream
                 Resource: '*'
-              - Effect: Allow
-                Action:
-                  - bedrock-mantle:*
-                Resource: '*'
       Tags:
         - Key: Purpose
-          Value: CoderAIGatewayBedrockMantleKey
+          Value: CoderAIGatewayBedrockOpenAIKey
         - Key: ManagedBy
           Value: !Ref AWS::StackName
 
-  BedrockMantleApiKeySecret:
+  BedrockOpenAIApiKeySecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'coder-bedrock-mantle-api-key-${AWS::StackName}'
+      Name: !Sub 'coder-bedrock-openai-api-key-${AWS::StackName}'
       Description: !Sub >-
-        Bedrock Mantle ServiceCredentialSecret for Coder AI Gateway openai-compat provider.
+        Amazon Bedrock API key (bedrock.amazonaws.com ServiceCredentialSecret) for the Coder
+        AI Gateway openai-compat provider (bedrock-runtime /openai/v1 endpoint).
         IAM user: coder-bedrock-api-key-user-${AWS::StackName}.
         Populated by CodeBuild post_build.
       SecretString: 'PENDING_CODEBUILD_POPULATION'
       Tags:
         - Key: Purpose
-          Value: CoderAIGatewayBedrockMantleKey
+          Value: CoderAIGatewayBedrockOpenAIKey
         - Key: ManagedBy
           Value: !Ref AWS::StackName
 
@@ -862,8 +859,8 @@ Resources:
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
           - Name: ChallengeImageUri
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
-          - Name: BEDROCK_MANTLE_SECRET_ARN
-            Value: !Ref BedrockMantleApiKeySecret
+          - Name: BEDROCK_OPENAI_SECRET_ARN
+            Value: !Ref BedrockOpenAIApiKeySecret
           
       Source:
         Type: NO_SOURCE
@@ -1195,16 +1192,19 @@ Resources:
                         CODER_URL="${CODER_CLOUDFRONT_URL}"
                         BEDROCK_REGION="us-east-1"  # Anthropic inference profiles available in us-east-1
                         BEDROCK_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com"
-                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${BEDROCK_REGION}.api.aws/v1"
+                        BEDROCK_OPENAI_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com/openai/v1"
                         BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
 
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
-                          --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
+                          --secret-id "${BEDROCK_OPENAI_SECRET_ARN}" \
                           --region "${AWSRegion}" \
                           --query SecretString --output text 2>/dev/null || echo "")
 
                         if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
-                          echo "Creating Bedrock service-specific credential for ${BEDROCK_USER}..."
+                          # Amazon Bedrock API key = a bedrock.amazonaws.com IAM service-specific
+                          # credential (ABSK...), valid as a bearer key on the bedrock-runtime
+                          # native OpenAI-compatible endpoint (/openai/v1).
+                          echo "Creating Bedrock API key (service-specific credential) for ${BEDROCK_USER}..."
                           for CRED_ID in $(aws iam list-service-specific-credentials \
                             --user-name "${BEDROCK_USER}" \
                             --service-name bedrock.amazonaws.com \
@@ -1219,16 +1219,16 @@ Resources:
                             --user-name "${BEDROCK_USER}" \
                             --service-name bedrock.amazonaws.com \
                             --credential-age-days 30)
-                          BEDROCK_MANTLE_KEY=$(echo "${CRED_JSON}" | python3 -c \
+                          BEDROCK_OPENAI_KEY=$(echo "${CRED_JSON}" | python3 -c \
                             "import json,sys; print(json.load(sys.stdin)['ServiceSpecificCredential']['ServiceCredentialSecret'])")
                           aws secretsmanager put-secret-value \
-                            --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
-                            --secret-string "${BEDROCK_MANTLE_KEY}" \
+                            --secret-id "${BEDROCK_OPENAI_SECRET_ARN}" \
+                            --secret-string "${BEDROCK_OPENAI_KEY}" \
                             --region "${AWSRegion}"
                           echo "ServiceCredentialSecret stored in Secrets Manager."
                         else
-                          echo "Bedrock Mantle secret already populated; reusing."
-                          BEDROCK_MANTLE_KEY="${EXISTING_SECRET}"
+                          echo "Bedrock API key secret already populated; reusing."
+                          BEDROCK_OPENAI_KEY="${EXISTING_SECRET}"
                         fi
 
                         echo "=== Configuring Coder AI Providers + Models via Terraform (coderd) ==="
@@ -1237,10 +1237,10 @@ Resources:
                         # replacing the direct /api/v2/ai/providers and
                         # /api/experimental/chats/model-configs API calls.
                         export CODER_AGENT_URL="${CODER_URL}"
-                        export BEDROCK_REGION BEDROCK_ENDPOINT BEDROCK_MANTLE_ENDPOINT
+                        export BEDROCK_REGION BEDROCK_ENDPOINT BEDROCK_OPENAI_ENDPOINT
                         export BEDROCK_MODEL="global.anthropic.claude-opus-4-6-v1"
                         export BEDROCK_SMALL_FAST_MODEL="global.anthropic.claude-haiku-4-5-20251001-v1:0"
-                        export BEDROCK_MANTLE_KEY
+                        export BEDROCK_OPENAI_KEY
 
                         ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
                         echo "=== AI Provider + Agents MCP Configuration Complete ==="
@@ -1499,9 +1499,9 @@ Outputs:
     Description: ECR URI for Challenge workspace image
     Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
 
-  BedrockMantleApiKeySecretArn:
-    Description: ARN of the Bedrock Mantle API key secret (ServiceCredentialSecret)
-    Value: !Ref BedrockMantleApiKeySecret
+  BedrockOpenAIApiKeySecretArn:
+    Description: ARN of the Amazon Bedrock API key secret (bedrock.amazonaws.com ServiceCredentialSecret) for the /openai/v1 provider
+    Value: !Ref BedrockOpenAIApiKeySecret
 
   BedrockApiKeyUserName:
     Description: IAM user that owns the Bedrock service-specific credential
