@@ -167,12 +167,13 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 |----------|--------------|----------|
 | `awshp-k8s-challenge-agent` | AWS Workshop - AI Agent Development | Build & deploy AI agents to AWS. Pre-loaded agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr), AWS CDK/CLI + Bedrock. Optimized for Coder Agents. |
 | `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code AI assistant with task automation. |
+| `awshp-k8s-base-codex` | AWS Workshop — Kubernetes with OpenAI Codex | OpenAI Codex CLI (GPT-5.6 Sol via the Coder AI Gateway) for interactive development. |
 | `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
 
 All templates support both compute lanes (Fargate default, EC2 Spot optional) via the
 **Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
 
-The **Claude Code** and **Kiro CLI** templates ship a citizen-builder set of
+The **Claude Code**, **Codex**, and **Kiro CLI** templates ship a citizen-builder set of
 [AWS Labs MCP servers](https://github.com/awslabs/mcp) preconfigured for their assistants
 — AWS documentation, IaC (CloudFormation + CDK), pricing, API (`call_aws`), Serverless, and
 CloudWatch — running on demand via `uvx`.
@@ -205,7 +206,7 @@ used by the Fargate templates:
 
 | ECR repository | Built from | Used by template |
 |----------------|------------|------------------|
-| `<EKSClusterName>/coder-workspace-claude-code` | [`images/coder-workspace-claude-code/`](./images/coder-workspace-claude-code) | `awshp-k8s-base-claudecode` |
+| `<EKSClusterName>/coder-workspace-claude-code` | [`images/coder-workspace-claude-code/`](./images/coder-workspace-claude-code) | `awshp-k8s-base-claudecode`, `awshp-k8s-base-codex` |
 | `<EKSClusterName>/coder-workspace-kiro-cli` | [`images/coder-workspace-kiro-cli/`](./images/coder-workspace-kiro-cli) | `awshp-k8s-base-kirocli` |
 | `<EKSClusterName>/coder-workspace-challenge` | [`images/coder-workspace-challenge/`](./images/coder-workspace-challenge) | `awshp-k8s-challenge-agent` |
 
