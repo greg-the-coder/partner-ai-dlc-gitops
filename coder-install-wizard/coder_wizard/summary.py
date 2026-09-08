@@ -25,7 +25,7 @@ class InstallSummary:
     # Secrets
     admin_password_secret_arn: str = ""
     admin_session_token_secret_arn: str = ""
-    bedrock_mantle_api_key_secret_arn: str = ""
+    bedrock_openai_api_key_secret_arn: str = ""
 
     # Infrastructure IDs
     efs_file_system_id: str = ""
@@ -75,7 +75,7 @@ def build_summary(
         cloudfront_distribution_id=o("CloudFrontDistributionId"),
         admin_password_secret_arn=o("CoderAdminPasswordSecretArn"),
         admin_session_token_secret_arn=o("CoderSessionTokenSecretArn"),
-        bedrock_mantle_api_key_secret_arn=o("BedrockMantleApiKeySecretArn"),
+        bedrock_openai_api_key_secret_arn=o("BedrockOpenAIApiKeySecretArn"),
         efs_file_system_id=o("EfsFileSystemId"),
         fargate_subnet_1=o("FargateSubnet1Id"),
         fargate_subnet_2=o("FargateSubnet2Id"),
@@ -132,7 +132,7 @@ def print_summary(summary: InstallSummary) -> None:
     print("  SECRETS (retrieve via AWS CLI or Console → Secrets Manager)")
     print(f"  Admin password     : {summary.admin_password_secret_arn}")
     print(f"  Session token      : {summary.admin_session_token_secret_arn}")
-    print(f"  Bedrock Mantle key : {summary.bedrock_mantle_api_key_secret_arn}")
+    print(f"  Bedrock API key    : {summary.bedrock_openai_api_key_secret_arn}")
     print()
     print("  NEXT STEPS")
     for i, step in enumerate(summary.next_steps, 1):

@@ -34,7 +34,7 @@ It replaces the manual two-stack README process with:
 | Compute lane 1 — **Fargate** | EKS Fargate profile `coder-workspaces`; pods labelled `compute=fargate`; Firecracker microVM isolation |
 | Compute lane 2 — **EC2 Spot** | EKS Auto Mode Spot NodePool `coder-ws-spot`; pods opt in via the template **Compute Lane** parameter; auto-scaled, scale-to-zero |
 | Storage standard | **Amazon EFS** per-workspace access point mounted at `/home/coder` in **both** lanes |
-| AI | Amazon Bedrock (native) + Bedrock Mantle (OpenAI-compatible) via Coder Agents |
+| AI | Amazon Bedrock (native) + OpenAI-compatible Bedrock endpoint (`bedrock-runtime/openai/v1`) via Coder Agents |
 
 ---
 
@@ -147,7 +147,7 @@ The wizard captures the CloudFormation inputs teams change most often:
 |---|---|
 | AWS Credentials | `sts get-caller-identity` — valid credentials exist |
 | AWS Region | Warns if deploying outside us-east-1 (Bedrock inference hardcoded there) |
-| Bedrock Model Access | Claude Opus 4.6, Claude Haiku 4.5, OpenAI gpt-oss-120b, Devstral 2 accessible |
+| Bedrock Model Access | Claude Opus 4.6, Claude Haiku 4.5, OpenAI GPT-5.6 Sol, xAI Grok 4.6 accessible |
 | Quota: EKS Clusters / VPCs / NAT Gateways / EIPs | Headroom for a fresh cluster |
 | Quota: Aurora ACUs | ≥ 40 Serverless v2 ACUs |
 | Quota: EC2 Spot Standard vCPUs | ≥ 32 (for the Spot workspace lane) |

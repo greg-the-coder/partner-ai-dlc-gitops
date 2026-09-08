@@ -9,10 +9,10 @@
 #   CODER_AGENT_URL           - Coder deployment URL              (required)
 #   BEDROCK_REGION            - AWS region for Bedrock            (default us-east-1)
 #   BEDROCK_ENDPOINT          - native Bedrock runtime base URL
-#   BEDROCK_MANTLE_ENDPOINT   - OpenAI-compatible Mantle base URL
+#   BEDROCK_OPENAI_ENDPOINT   - OpenAI-compatible base URL (bedrock-runtime /openai/v1)
 #   BEDROCK_MODEL             - primary/default model id
 #   BEDROCK_SMALL_FAST_MODEL  - small/fast model id
-#   BEDROCK_MANTLE_KEY        - Mantle (OpenAI-compat) API key    (required)
+#   BEDROCK_OPENAI_KEY        - Amazon Bedrock API key (ABSK bearer)  (required)
 #   MCP_KNOWLEDGE_SLUG        - AWS Knowledge MCP server slug     (default aws-knowledge)
 #   MCP_KNOWLEDGE_URL         - AWS Knowledge MCP server endpoint (default knowledge-mcp.global.api.aws)
 #   MCP_KNOWLEDGE_AVAIL       - availability policy               (default default_on)
@@ -48,10 +48,10 @@ export TF_VAR_coder_url="${CODER_AGENT_URL}"
 export TF_VAR_coder_token="${CODER_TOKEN}"
 export TF_VAR_bedrock_region="${BEDROCK_REGION:-us-east-1}"
 export TF_VAR_bedrock_endpoint="${BEDROCK_ENDPOINT:-https://bedrock-runtime.${BEDROCK_REGION:-us-east-1}.amazonaws.com}"
-export TF_VAR_bedrock_mantle_endpoint="${BEDROCK_MANTLE_ENDPOINT:-https://bedrock-mantle.${BEDROCK_REGION:-us-east-1}.api.aws/v1}"
+export TF_VAR_bedrock_openai_endpoint="${BEDROCK_OPENAI_ENDPOINT:-https://bedrock-runtime.${BEDROCK_REGION:-us-east-1}.amazonaws.com/openai/v1}"
 export TF_VAR_bedrock_model="${BEDROCK_MODEL:-global.anthropic.claude-opus-4-6-v1}"
 export TF_VAR_bedrock_small_fast_model="${BEDROCK_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}"
-export TF_VAR_bedrock_mantle_api_key="${BEDROCK_MANTLE_KEY:-}"
+export TF_VAR_bedrock_openai_api_key="${BEDROCK_OPENAI_KEY:-}"
 
 # Coder Agents MCP server (AWS Knowledge) — overridable, with sensible defaults.
 export TF_VAR_mcp_knowledge_slug="${MCP_KNOWLEDGE_SLUG:-aws-knowledge}"

@@ -120,14 +120,15 @@ def check_bedrock_model_access(region: str = "us-east-1") -> CheckResult:
         # (model_id_prefix_to_check, friendly_name)
         ("anthropic.claude-haiku-4",    "Claude Haiku 4.5 (Bedrock)"),
         ("anthropic.claude-opus-4",     "Claude Opus 4.6 (Bedrock)"),
-        ("openai.gpt-oss",              "OpenAI gpt-oss-120b (Bedrock Mantle)"),
-        ("mistral.devstral",            "Devstral 2 (Bedrock Mantle)"),
+        ("openai.gpt-5.6-sol",          "OpenAI GPT-5.6 Sol (Bedrock OpenAI endpoint)"),
+        ("xai.grok-4.6",                "xAI Grok 4.6 (Bedrock OpenAI endpoint)"),
     ]
 
+    # NOTE: no --by-inference-type filter: GPT-5.6 Sol and Grok 4.6 are
+    # cross-region (INFERENCE_PROFILE) models and would be hidden by ON_DEMAND.
     code, data = _aws_json([
         "bedrock", "list-foundation-models",
         "--region", region,
-        "--by-inference-type", "ON_DEMAND",
     ])
 
     if code != 0 or data is None:
@@ -139,7 +140,7 @@ def check_bedrock_model_access(region: str = "us-east-1") -> CheckResult:
             fix=(
                 "Go to AWS Console → Amazon Bedrock → Model access and enable:\n"
                 "  • Claude Opus 4.6 / Claude Haiku 4.5 (Anthropic)\n"
-                "  • OpenAI gpt-oss-120b / Devstral 2 (served via Bedrock Mantle)\n"
+                "  • OpenAI GPT-5.6 Sol / xAI Grok 4.6 (served via the Bedrock OpenAI endpoint)\n"
                 "Ensure your IAM user/role has bedrock:InvokeModel permission."
             ),
         )

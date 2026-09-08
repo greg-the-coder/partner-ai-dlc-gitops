@@ -51,6 +51,12 @@ variable "challenge_image" {
   default     = ""
 }
 
+variable "codex_image" {
+  type        = string
+  description = "ECR image URI for Codex workspace (reuses the Claude Code workspace image, which already ships node/npm/uv)"
+  default     = ""
+}
+
 variable "efs_file_system_id" {
   type        = string
   description = "EFS file system ID for persistent workspace storage"
@@ -108,6 +114,31 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     {
       name  = "workspace_image"
       value = var.kiro_cli_image
+    },
+    {
+      name  = "efs_file_system_id"
+      value = var.efs_file_system_id
+    }]
+  }]
+}
+
+resource "coderd_template" "awshp-k8s-with-codex" {
+  name        = "awshp-k8s-base-codex"
+  display_name = "AWS Workshop - Kubernetes with OpenAI Codex"
+  description = "Fargate OpenAI Codex CLI workspace via the Coder AI Gateway (GPT-5.6 Sol on Bedrock), with AWS Labs MCP servers and AWS CLI/CDK"
+  icon = "/icon/k8s.png"
+  versions = [{
+    directory = "./awshp-k8s-with-codex"
+    active    = true
+    # Version name is optional
+    name = var.coder_gitsha
+    tf_vars = [{
+      name  = "namespace"
+      value = "coder-ws"
+    },
+    {
+      name  = "workspace_image"
+      value = var.codex_image
     },
     {
       name  = "efs_file_system_id"

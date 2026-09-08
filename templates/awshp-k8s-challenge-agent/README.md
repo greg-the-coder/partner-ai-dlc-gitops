@@ -62,9 +62,9 @@ config:
 from langchain_anthropic import ChatAnthropic
 llm = ChatAnthropic(model="global.anthropic.claude-opus-4-6-v1")
 
-# OpenAI protocol -> gateway -> Bedrock Mantle (OpenAI-compatible) provider
+# OpenAI protocol -> gateway -> Bedrock (OpenAI-compatible) provider
 from langchain_openai import ChatOpenAI
-llm = ChatOpenAI(model="openai.gpt-oss-120b")   # or "mistral.devstral-2-123b"
+llm = ChatOpenAI(model="us.openai.gpt-5.6-sol")   # or "us.xai.grok-4.6"
 ```
 
 > **Bedrock SigV4 is not gateway-routable.** The AI Gateway only exposes OpenAI- and
