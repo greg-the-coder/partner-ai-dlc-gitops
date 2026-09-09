@@ -175,8 +175,13 @@ All templates support both compute lanes (Fargate default, EC2 Spot optional) vi
 
 The **Claude Code**, **Codex**, and **Kiro CLI** templates ship a citizen-builder set of
 [AWS Labs MCP servers](https://github.com/awslabs/mcp) preconfigured for their assistants
-— AWS documentation, IaC (CloudFormation + CDK), pricing, API (`call_aws`), Serverless, and
-CloudWatch — running on demand via `uvx`.
+— IaC (CloudFormation + CDK), pricing, Serverless, and CloudWatch — running on demand via
+`uvx`. General AWS API access is provided by the AWS CLI (v2) and boto3, which the agents
+drive directly from the shell.
+
+> The managed remote `aws-mcp` server (AWS Agent Toolkit; arbitrary-API `call_aws` +
+> general AWS docs) was removed from all templates: its remote endpoint intermittently
+> failed the MCP handshake with `-32602 Invalid request parameters`, disabling the server.
 
 ## Prerequisites
 

@@ -48,26 +48,6 @@ locals {
   # non-ECR images (e.g. the codercom/enterprise-base default).
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
-  # AWS MCP servers for Kiro CLI (mcp.json), all over stdio via `uvx`
-  # (quiet logging). A citizen-builder toolkit spanning the AWS solution
-  # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
-  # plus search/read_documentation and agent skills), design & validate IaC
-  # (iac), estimate cost (pricing), then build & operate the account (serverless,
-  # cloudwatch). All calls use the workspace IAM role (`<cluster>-workshop-user`);
-  # AWS_REGION pins the deployment operation region (local.aws_region, derived
-  # from the ECR image URI). `aws-mcp` replaces the deprecated
-  # awslabs.aws-api-mcp-server AND the standalone awslabs.aws-documentation-mcp-server
-  # (whose documentation tools it subsumes; running both would create duplicate
-  # tool names that degrade agent tool selection). See
-  # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
-  # Common env applied to EVERY MCP server. The Kiro IDE (kiro-agent) launches
-  # stdio MCP servers with a FILTERED environment (the MCP SDK's
-  # getDefaultEnvironment only forwards HOME/PATH/etc.), so - unlike the Kiro
-  # CLI, which inherits the login shell - the servers do NOT see the pod's IRSA
-  # AWS_* vars. We therefore pin region + STS behaviour here, point uv at the
-  # on-image warm cache, and inject the runtime IRSA role/token below. Without
-  # this the aws-mcp proxy can't SigV4-sign and its initialize is rejected with
-  # "MCP error -32602: Invalid request parameters".
   # Codex config.toml (written by the codex module). Routes Codex through the
   # Coder AI Gateway's `openai-compat` provider (-> Amazon Bedrock bedrock-runtime
   # /openai/v1) using the workspace owner's Coder session token as the API key
@@ -108,19 +88,22 @@ locals {
   TOML
 
   # AWS MCP servers for Codex (native TOML [mcp_servers.*], appended to
-  # config.toml by the module). Same citizen-builder AWS toolkit as the Claude
-  # Code / Kiro templates (aws-mcp + awslabs iac/pricing/serverless/cloudwatch),
-  # run on demand via uvx from the pre-warmed on-image cache (/opt/uv-cache).
-  # Calls use the workspace IRSA role (Codex forwards the pod env to the stdio
-  # servers, so AWS_ROLE_ARN / web-identity token are inherited); AWS_REGION pins
-  # the operation region (local.aws_region, derived from the ECR image URI).
-  # KEEP VERSIONS IN SYNC with images/coder-workspace-base/Dockerfile.
+  # config.toml by the module). A citizen-builder toolkit of AWS Labs MCP servers
+  # matching the Claude Code / Kiro templates (awslabs iac/pricing/serverless/
+  # cloudwatch), run on demand via uvx from the pre-warmed on-image cache
+  # (/opt/uv-cache). Calls use the workspace IRSA role (Codex forwards the pod env
+  # to the stdio servers, so AWS_ROLE_ARN / web-identity token are inherited);
+  # AWS_REGION pins the operation region (local.aws_region, derived from the ECR
+  # image URI). KEEP VERSIONS IN SYNC with images/coder-workspace-base/Dockerfile.
+  #
+  # NOTE: the managed remote `aws-mcp` server (AWS's Agent Toolkit endpoint via
+  # mcp-proxy-for-aws, which provided call_aws for arbitrary AWS APIs plus general
+  # AWS documentation) was REMOVED across all templates: its remote endpoint
+  # intermittently failed the MCP handshake with "-32602 Invalid request
+  # parameters", disabling the server (Codex, an rmcp client, was hit hardest).
+  # General AWS API access is available via the AWS CLI (v2) and boto3, which the
+  # model drives directly from the shell.
   codex_mcp_toml = <<-TOML
-    [mcp_servers.aws-mcp]
-    command = "uvx"
-    args = ["mcp-proxy-for-aws@1.6.4", "https://aws-mcp.us-east-1.api.aws/mcp", "--metadata", "AWS_REGION=${local.aws_region}"]
-    env = { AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
-
     [mcp_servers.awslabs-aws-iac-mcp-server]
     command = "uvx"
     args = ["awslabs.aws-iac-mcp-server==1.0.25"]
