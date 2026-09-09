@@ -61,6 +61,17 @@ Bedrock-backed gateway. Non-obvious settings and why they are required:
 > The path segment (`openai-compat`) is the **AI Gateway provider name** from
 > `ai-providers/`, not the API type — the gateway routes `/api/v2/ai-gateway/<provider-name>/`.
 
+### Known limitation — the `/model` command
+Codex's `/model` picker lists its built-in model lineup (e.g. gpt-6-astra, gpt-5.6-sol,
+gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.2). This deployment routes through the Coder
+AI Gateway, which **only** serves the configured model (`us.openai.gpt-5.6-sol`), so
+selecting any other entry makes the gateway reject the request and **breaks the session**.
+codex 0.153.4 exposes no supported setting to disable or restrict the picker, so as a
+stopgap the template writes a note into the workspace `AGENTS.md` telling the agent and
+the user not to use `/model` (changing the reasoning effort for the current model is
+fine). If you switch by mistake, restart Codex to return to the configured model. A hard
+lock is tracked for a future update.
+
 ### Notebooks & agent SDKs (Coder AI Gateway)
 The agent kernel (`Python (Agents)`) inherits `OPENAI_BASE_URL` and `OPENAI_API_KEY`, so
 OpenAI-protocol clients route through the gateway with no extra config:
