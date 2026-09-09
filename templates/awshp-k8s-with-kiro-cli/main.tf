@@ -48,25 +48,27 @@ locals {
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
   # AWS MCP servers for Kiro CLI (mcp.json), all over stdio via `uvx`
-  # (quiet logging). A citizen-builder toolkit spanning the AWS solution
-  # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
-  # plus search/read_documentation and agent skills), design & validate IaC
-  # (iac), estimate cost (pricing), then build & operate the account (serverless,
-  # cloudwatch). All calls use the workspace IAM role (`<cluster>-workshop-user`);
-  # AWS_REGION pins the deployment operation region (local.aws_region, derived
-  # from the ECR image URI). `aws-mcp` replaces the deprecated
-  # awslabs.aws-api-mcp-server AND the standalone awslabs.aws-documentation-mcp-server
-  # (whose documentation tools it subsumes; running both would create duplicate
-  # tool names that degrade agent tool selection). See
-  # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
+  # (quiet logging). A citizen-builder toolkit of AWS Labs MCP servers spanning
+  # the AWS solution lifecycle: design & validate IaC (iac), estimate cost
+  # (pricing), then build & operate the account (serverless, cloudwatch). All
+  # calls use the workspace IAM role (`<cluster>-workshop-user`); AWS_REGION pins
+  # the deployment operation region (local.aws_region, derived from the ECR image
+  # URI). See https://github.com/awslabs/mcp.
+  #
+  # NOTE: the managed remote `aws-mcp` server (AWS's Agent Toolkit endpoint via
+  # mcp-proxy-for-aws, which provided call_aws for arbitrary AWS APIs plus general
+  # AWS documentation) was REMOVED: its remote endpoint intermittently failed the
+  # MCP handshake with "-32602 Invalid request parameters", disabling the server.
+  # General AWS API access is instead available through the AWS CLI (v2, installed
+  # in the image) and boto3, which the agent drives directly from the shell.
+  #
   # Common env applied to EVERY MCP server. The Kiro IDE (kiro-agent) launches
   # stdio MCP servers with a FILTERED environment (the MCP SDK's
   # getDefaultEnvironment only forwards HOME/PATH/etc.), so - unlike the Kiro
   # CLI, which inherits the login shell - the servers do NOT see the pod's IRSA
   # AWS_* vars. We therefore pin region + STS behaviour here, point uv at the
-  # on-image warm cache, and inject the runtime IRSA role/token below. Without
-  # this the aws-mcp proxy can't SigV4-sign and its initialize is rejected with
-  # "MCP error -32602: Invalid request parameters".
+  # on-image warm cache, and inject the runtime IRSA role/token below so the
+  # (boto3-based) awslabs servers can resolve credentials.
   mcp_common_env = {
     AWS_REGION                 = local.aws_region
     AWS_DEFAULT_REGION         = local.aws_region
@@ -81,15 +83,6 @@ locals {
   # KEEP THESE VERSIONS IN SYNC with images/coder-workspace-base/Dockerfile and
   # templates/awshp-k8s-with-claude-code/main.tf.
   aws_mcp_servers = {
-    "aws-mcp" = {
-      command = "uvx"
-      args = [
-        "mcp-proxy-for-aws@1.6.4",
-        "https://aws-mcp.us-east-1.api.aws/mcp",
-        "--metadata", "AWS_REGION=${local.aws_region}",
-      ]
-      env = local.mcp_common_env
-    }
     "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-iac-mcp-server==1.0.25"]
@@ -249,10 +242,10 @@ MCP_EOF
 
     # Inject the pod's live IRSA credentials into every MCP server's env. The
     # Kiro IDE launches stdio servers with a filtered environment and does NOT
-    # forward AWS_ROLE_ARN / the web-identity token, so the aws-mcp proxy can't
-    # SigV4-sign (initialize fails with "MCP error -32602"). Writing the values
-    # into each server's declared env (which the MCP client DOES pass through)
-    # fixes this for the IDE while remaining a no-op for the CLI.
+    # forward AWS_ROLE_ARN / the web-identity token, so the awslabs servers can't
+    # resolve credentials via the default chain. Writing the values into each
+    # server's declared env (which the MCP client DOES pass through) fixes this
+    # for the IDE while remaining a no-op for the CLI.
     if command -v jq >/dev/null 2>&1 && [ -n "$${AWS_ROLE_ARN:-}" ]; then
       TOKF="$${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
       MCPTMP=$(mktemp)

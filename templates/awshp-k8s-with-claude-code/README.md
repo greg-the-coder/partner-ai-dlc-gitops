@@ -31,9 +31,13 @@ persisted on **Amazon EFS** so work survives workspace restarts.
   > Requires Coder v2.32+ with the Coder AI Governance Add-On enabled on the deployment.
 - **MCP** (Model Context Protocol) — a citizen-builder set of
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) is added to Claude Code at user
-  scope and run on demand via `uvx`: AWS **documentation**, **IaC** (CloudFormation + CDK),
-  **pricing**, **API** (`call_aws`), **Serverless**, and **CloudWatch** — covering the
-  learn → design → cost → build/deploy → operate lifecycle. Calls use the workspace IAM role.
+  scope and run on demand via `uvx`: **IaC** (CloudFormation + CDK), **pricing**,
+  **Serverless**, and **CloudWatch** — covering the design → cost → build/deploy → operate
+  lifecycle. Calls use the workspace IAM role.
+  > The managed remote `aws-mcp` server (arbitrary-API `call_aws` + general AWS docs) was
+  > removed from all templates because its remote endpoint intermittently failed the MCP
+  > handshake (`-32602`). General AWS API access is available via the **AWS CLI** (v2) and
+  > **boto3**, which the assistant drives directly from the shell.
 
 ### Notebooks & agent SDKs (Coder AI Gateway)
 The template points the Python agent SDKs at the **Coder AI Gateway** (via agent-wide

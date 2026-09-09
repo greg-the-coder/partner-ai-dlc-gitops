@@ -32,11 +32,15 @@ Gateway.
 - **MCP** (Model Context Protocol) — the same citizen-builder set of
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) as the Claude Code template is
   configured for Codex (native `[mcp_servers.*]` TOML) and run on demand via `uvx`:
-  AWS **API + documentation** (`aws-mcp`), **IaC** (CloudFormation + CDK), **pricing**,
-  **Serverless**, and **CloudWatch** — covering the learn → design → cost → build/deploy →
-  operate lifecycle. Calls use the workspace IAM role (IRSA); Codex forwards the pod
-  environment to the stdio MCP servers, so the `<cluster>-workshop-user` role/token are
-  inherited automatically (no runtime credential injection needed).
+  **IaC** (CloudFormation + CDK), **pricing**, **Serverless**, and **CloudWatch** —
+  covering the design → cost → build/deploy → operate lifecycle. Calls use the workspace
+  IAM role (IRSA); Codex forwards the pod environment to the stdio MCP servers, so the
+  `<cluster>-workshop-user` role/token are inherited automatically (no runtime credential
+  injection needed).
+  > The managed remote `aws-mcp` server (arbitrary-API `call_aws` + general AWS docs) was
+  > removed from all templates because its remote endpoint intermittently failed the MCP
+  > handshake (`-32602`). General AWS API access is available via the **AWS CLI** (v2) and
+  > **boto3**, which the model drives directly from the shell.
 
 ### Codex configuration notes
 The template bakes a `config.toml` (via the module's `base_config_toml`) tuned for the

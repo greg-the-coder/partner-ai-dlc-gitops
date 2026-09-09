@@ -144,7 +144,6 @@ ENV UV_CACHE_DIR=/opt/uv-cache
 # local.(aws_)mcp_servers in templates/awshp-k8s-with-{claude-code,kiro-cli}/main.tf.
 # (The challenge template has no MCP servers and simply carries the extra cache.)
 RUN set -ux; for p in \
-      mcp-proxy-for-aws@1.6.4 \
       awslabs.aws-iac-mcp-server==1.0.25 \
       awslabs.aws-pricing-mcp-server==1.1.0 \
       awslabs.aws-serverless-mcp-server==0.2.0 \

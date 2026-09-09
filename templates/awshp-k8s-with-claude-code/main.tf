@@ -56,24 +56,26 @@ locals {
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
   # MCP servers added to Claude Code at user scope, all over stdio via `uvx`
-  # (quiet logging). A citizen-builder toolkit spanning the AWS solution
-  # lifecycle: `aws-mcp` (AWS's managed AWS MCP Server — call_aws for any AWS API
-  # plus search/read_documentation and agent skills), design & validate IaC
-  # (iac), estimate cost (pricing), then build & operate the account (serverless,
-  # cloudwatch). All calls use the workspace IAM role (`<cluster>-workshop-user`);
-  # AWS_REGION pins the deployment operation region (local.aws_region, derived
-  # from the ECR image URI). `aws-mcp` replaces the deprecated
-  # awslabs.aws-api-mcp-server AND the standalone awslabs.aws-documentation-mcp-server
-  # (whose documentation tools it subsumes; running both would create duplicate
-  # tool names that degrade agent tool selection). See
-  # https://docs.aws.amazon.com/agent-toolkit/ and https://github.com/awslabs/mcp.
+  # (quiet logging). A citizen-builder toolkit of AWS Labs MCP servers spanning
+  # the AWS solution lifecycle: design & validate IaC (iac), estimate cost
+  # (pricing), then build & operate the account (serverless, cloudwatch). All
+  # calls use the workspace IAM role (`<cluster>-workshop-user`); AWS_REGION pins
+  # the deployment operation region (local.aws_region, derived from the ECR image
+  # URI). See https://github.com/awslabs/mcp.
+  #
+  # NOTE: the managed remote `aws-mcp` server (AWS's Agent Toolkit endpoint via
+  # mcp-proxy-for-aws, which provided call_aws for arbitrary AWS APIs plus general
+  # AWS documentation) was REMOVED: its remote endpoint intermittently failed the
+  # MCP handshake with "-32602 Invalid request parameters", disabling the server.
+  # General AWS API access is instead available through the AWS CLI (v2, installed
+  # in the image) and boto3, which the agent drives directly from the shell.
   #
   # Common env applied to EVERY MCP server. Claude Code (a CLI) inherits the
   # login-shell environment, but we set these explicitly so the servers are
   # robust regardless of launcher (and to match the Kiro IDE, whose MCP client
   # forwards only a filtered env). Pins region + STS behaviour, points uv at the
   # on-image warm cache, and the reconcile script below injects the runtime IRSA
-  # role/token so the aws-mcp proxy can SigV4-sign.
+  # role/token so the (boto3-based) awslabs servers can resolve credentials.
   mcp_common_env = {
     AWS_REGION                 = local.aws_region
     AWS_DEFAULT_REGION         = local.aws_region
@@ -87,24 +89,6 @@ locals {
   # images/coder-workspace-base/Dockerfile and
   # templates/awshp-k8s-with-kiro-cli/main.tf.
   mcp_servers = {
-    # AWS MCP Server (Agent Toolkit) — remote, SigV4-authenticated. The local
-    # `mcp-proxy-for-aws` runs over stdio and signs each request with the pod's
-    # IRSA credentials (the <cluster>-workshop-user role, via the default AWS
-    # credential chain) — no OAuth/browser login needed. The endpoint Region is
-    # fixed (only us-east-1 / eu-central-1 exist); `--metadata AWS_REGION` sets
-    # the default Region for the AWS operations call_aws performs (local.aws_region,
-    # us-east-2 here). Governance: basic — inherits whatever the workshop-user
-    # role can do (the server injects aws:ViaAWSMCPService / aws:CalledViaAWSMCP
-    # context keys if you later want to scope MCP-initiated actions in IAM).
-    "aws-mcp" = {
-      command = "uvx"
-      args = [
-        "mcp-proxy-for-aws@1.6.4",
-        "https://aws-mcp.us-east-1.api.aws/mcp",
-        "--metadata", "AWS_REGION=${local.aws_region}",
-      ]
-      env = local.mcp_common_env
-    }
     "awslabs-aws-iac-mcp-server" = {
       command = "uvx"
       args    = ["awslabs.aws-iac-mcp-server==1.0.25"]
@@ -245,7 +229,7 @@ resource "coder_env" "openai_api_key" {
 }
 
 # Claude Code's MCP client aborts a server that isn't ready within MCP_TIMEOUT ms
-# (default 30000). The awslabs / mcp-proxy-for-aws servers run via `uvx`, whose
+# (default 30000). The awslabs servers run via `uvx`, whose
 # FIRST invocation downloads & builds the package (tens of seconds to a couple
 # minutes on a cold workspace) before the server can speak MCP, so the default
 # 30s probe reports "connection timed out after 30000ms". Raise the startup and
@@ -557,7 +541,7 @@ resource "coder_script" "claude_config_reconcile" {
     # removed/renamed servers and stale env such as an old AWS_REGION), then
     # merge in this template's set. Non-managed (user-added) servers are kept.
     # The pod's live IRSA role/token are injected into every managed server's
-    # env so SigV4-signed calls (the aws-mcp proxy) authenticate even if the
+    # env so the boto3-based awslabs servers can resolve credentials even if the
     # launcher does not forward AWS_* (matches the Kiro IDE behaviour).
     ROLE="$${AWS_ROLE_ARN:-}"
     TOKF="$${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
