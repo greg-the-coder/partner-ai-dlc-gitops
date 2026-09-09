@@ -306,15 +306,22 @@ resource "coder_agent" "dev" {
 
     # Claude Code v5 dropped the dangerously_skip_permissions input; set bypass
     # mode at user scope instead (equivalent to --dangerously-skip-permissions)
-    # and skip the dangerous-mode TOS prompt. User-scope settings.json is
-    # writable by the uid-1000 pod; managed-settings under /etc/claude-code would
-    # require root. This only writes ~/.claude/settings.json (never calls coder),
-    # and targets a different file than the module install script's ~/.claude.json,
-    # so it is safe to run concurrently with the module.
+    # and skip the dangerous-mode TOS prompt. We also LOCK model selection to the
+    # gateway-configured default by setting availableModels to an empty array
+    # ("only the default model is available", which declines any /model swap):
+    # Claude Code's model picker otherwise offers the full Anthropic lineup, but
+    # this deployment routes through the Coder AI Gateway (Bedrock provider), which
+    # only serves the admin-configured models (default Opus 4.6 + Haiku 4.5), so
+    # switching to any other model id makes the gateway reject the request and
+    # breaks the session. User-scope settings.json is writable by the uid-1000 pod;
+    # managed-settings under /etc/claude-code would require root. This only writes
+    # ~/.claude/settings.json (never calls coder), and targets a different file
+    # than the module install script's ~/.claude.json, so it is safe to run
+    # concurrently with the module.
     mkdir -p "$HOME/.claude"
     SETTINGS="$HOME/.claude/settings.json"
     [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
+    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "availableModels": [], "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
 
     EOT
 
