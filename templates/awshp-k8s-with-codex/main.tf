@@ -235,6 +235,30 @@ resource "coder_agent" "dev" {
     cat > $HOME/.local/share/code-server/User/settings.json <<'SETTINGS_EOF'
 { "security.workspace.trust.enabled": false }
 SETTINGS_EOF
+
+    # STOPGAP (model selection): this deployment pins the model via the Coder AI
+    # Gateway, but Codex's `/model` picker still lists other (gateway-unavailable)
+    # models, and codex 0.153.4 exposes no supported config to disable/lock the
+    # picker (model_catalog_json needs Codex's full internal model schema;
+    # requirements.toml governs only permissions/sandbox). Until a hard lock is
+    # available we DOCUMENT the constraint in AGENTS.md, which Codex loads as
+    # project guidance (and which users can read), so both the agent and the user
+    # avoid `/model`. Written once via an idempotent marker so user edits persist.
+    AGENTS="$HOME/AGENTS.md"
+    if ! grep -q "coder:codex-model-note" "$AGENTS" 2>/dev/null; then
+      cat >> "$AGENTS" <<'MD'
+<!-- coder:codex-model-note -->
+## Model selection (managed deployment)
+
+This workspace routes every model request through the **Coder AI Gateway**, which
+only serves the pre-configured model (GPT-5.6 Sol on Amazon Bedrock). **Do not use
+the Codex `/model` command to switch models** - the other entries in the picker are
+not configured on the gateway, so selecting one makes the request fail and breaks
+the session. Changing the reasoning effort for the current model is fine. If you
+switched by mistake, restart Codex (or the `codex` app) to return to the configured
+model.
+MD
+    fi
     EOT
 
 }
