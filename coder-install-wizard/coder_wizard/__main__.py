@@ -29,7 +29,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from coder_wizard import preflight, deploy, validate, cost_estimate, summary, dryrun
+from coder_wizard import preflight, deploy, validate, cost_estimate, summary, dryrun, teardown
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +447,134 @@ def cmd_status(args: argparse.Namespace) -> int:
         if cb:
             print(info(f"  CodeBuild: {_codebuild_url(args.region, cb)}"))
     return 0
+
+
+def cmd_teardown(args: argparse.Namespace) -> int:
+    """Tear down all resources created by the install wizard."""
+
+    _section("Tear Down — Resource Discovery")
+    print(info(f"Region  : {args.region}"))
+    print(info(f"Cluster : {args.cluster}"))
+    print()
+
+    print(info("Discovering resources..."))
+    resources = teardown.discover_resources(args.cluster, args.region)
+
+    # Print what was found
+    _section("Resources Found")
+
+    found_any = False
+
+    if resources["eks_cluster"]:
+        found_any = True
+        print(info(f"EKS cluster: {resources['eks_cluster']['name']} ({resources['eks_cluster']['status']})"))
+
+    for s in resources["cfn_stacks"]:
+        found_any = True
+        print(info(f"CloudFormation stack: {s['name']} ({s['status']})"))
+
+    for s in resources["eksctl_stacks"]:
+        found_any = True
+        print(info(f"eksctl stack: {s['name']} ({s['status']})"))
+
+    for r in resources["ecr_repos"]:
+        found_any = True
+        print(info(f"ECR repo: {r['name']}"))
+
+    for b in resources["s3_buckets"]:
+        found_any = True
+        print(info(f"S3 bucket: {b['name']}"))
+
+    for e in resources["efs_filesystems"]:
+        found_any = True
+        size_mb = e.get('size_bytes', 0) / (1024 * 1024)
+        print(info(f"EFS: {e['id']} ({e['name']}, {size_mb:.1f} MiB)"))
+
+    for a in resources["aurora_clusters"]:
+        found_any = True
+        print(info(f"Aurora: {a['id']} ({a['status']}, instances: {', '.join(a.get('instances', []))})"))
+
+    for s in resources["secrets"]:
+        found_any = True
+        print(info(f"Secret: {s['name']}"))
+
+    for u in resources["iam_users"]:
+        found_any = True
+        print(info(f"IAM user: {u['name']}"))
+
+    if not found_any:
+        print(warn(f"No resources found for cluster '{args.cluster}' in {args.region}."))
+        return 0
+
+    # Data retention warning
+    print()
+    if args.delete_data:
+        print(warn("--delete-data is set: Aurora database and EFS file system WILL BE PERMANENTLY DELETED."))
+    else:
+        print(info("Aurora database and EFS file system will be RETAINED (use --delete-data to remove them)."))
+
+    # Confirmation
+    print()
+    if not args.yes:
+        if not _confirm(
+            f"Delete ALL resources listed above for cluster '{args.cluster}'?",
+            default=False,
+        ):
+            print(info("Teardown cancelled."))
+            return 0
+
+        if args.delete_data:
+            if not _confirm(
+                "FINAL WARNING: This will permanently destroy the Aurora database and "
+                "EFS home directories. Type 'yes' to confirm",
+                default=False,
+            ):
+                print(info("Teardown cancelled."))
+                return 0
+
+    # Execute teardown
+    _section("Tearing Down")
+
+    def _on_status(msg: str) -> None:
+        print(info(msg))
+
+    result = teardown.run_teardown(
+        cluster=args.cluster,
+        region=args.region,
+        delete_data=args.delete_data,
+        on_status=_on_status,
+    )
+
+    # Print results
+    _section("Teardown Results")
+    for step in result.steps:
+        if step.status == "ok":
+            print(ok(f"{step.name}: {step.message}"))
+        elif step.status == "skipped":
+            print(dim(f"  ⏭️   {step.name}: {step.message}"))
+        elif step.status == "failed":
+            print(fail(f"{step.name}: {step.message}"))
+            if step.detail:
+                print(dim(f"        {step.detail}"))
+        else:
+            print(info(f"{step.name}: {step.status} — {step.message}"))
+
+    if result.warnings:
+        print()
+        print(warn("Warnings:"))
+        for w in result.warnings:
+            for line in w.split("\n"):
+                print(f"        {line}")
+
+    print()
+    if result.success:
+        print(ok("Teardown complete. All resources have been removed."))
+        if not args.delete_data and (resources["aurora_clusters"] or resources["efs_filesystems"]):
+            print(info("Retained resources (Aurora/EFS) still exist — delete manually or re-run with --delete-data."))
+        return 0
+    else:
+        print(fail("Teardown completed with errors. Some resources may need manual cleanup."))
+        return 1
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -1052,6 +1180,16 @@ def build_parser() -> argparse.ArgumentParser:
     wtp.add_argument("--cluster", default=DEFAULT_CLUSTER)
     wtp.add_argument("--stack",   default="", help="Specific stack name (default: <cluster>-coder)")
     wtp.set_defaults(func=cmd_watch)
+
+    # ── teardown ────────────────────────────────────────────
+    td = sub.add_parser("teardown", help="Tear down all resources created by the install wizard")
+    td.add_argument("--region",  default=_get_current_region(), help="AWS region")
+    td.add_argument("--cluster", default=DEFAULT_CLUSTER,       help="EKS cluster name")
+    td.add_argument("--delete-data", action="store_true",
+                    help="Also delete retained Aurora database and EFS file system (PERMANENT DATA LOSS)")
+    td.add_argument("--yes", action="store_true",
+                    help="Skip confirmation prompts (use with caution)")
+    td.set_defaults(func=cmd_teardown)
 
     return parser
 

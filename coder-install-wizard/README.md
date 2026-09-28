@@ -1,295 +1,267 @@
 # Partner Demo — Coder Install Wizard
 
-A GenAI-assisted CLI that guides you through a **Blue/Green install** of the
-Partner AI-DLC demo platform — [Coder](https://coder.com) **2.37.0** on Amazon EKS
-(Auto Mode) — into your own AWS account, using the
+A CLI that guides you through a **full lifecycle** of the Partner AI-DLC demo
+platform — [Coder](https://coder.com) **2.37.0** on Amazon EKS (Auto Mode) —
+from install to teardown, using the
 [`partner-ai-dlc-gitops`](https://github.com/greg-the-coder/partner-ai-dlc-gitops)
 CloudFormation stacks.
 
-It replaces the manual two-stack README process with:
+---
 
-1. **Pre-flight checks** — AWS credentials, Bedrock model access, service quotas
-   (EKS, NAT Gateway, Aurora ACUs, EIP, **EC2 Spot vCPUs**), ECR image dependency,
-   and EKS cluster-name conflicts.
-2. **Cost estimate** — a per-team-size monthly breakdown, including the **Fargate /
-   EC2-Spot compute-lane split**, before a single resource is created.
-3. **Ordered deployment** — deploys the image pipeline stack first (CodeBuild → ECR),
-   waits for images, then deploys the core Coder stack — eliminating the most common
-   `ImagePullBackOff` failure.
-4. **Real-time progress** — CloudFormation events streamed to your terminal.
-5. **Post-install validation** — Coder API reachable, admin token works, **Premium
-   license** applied, AI providers wired to Bedrock, templates deployed, **both compute
-   lanes ready** (Fargate profile ACTIVE + EC2 Spot NodePool present), EFS CSI driver
-   installed, and EFS available.
-6. **Install summary** — writes `install-summary.json` with endpoints, secret ARNs,
-   and validation results.
+## Quick Start
+
+```bash
+# Install
+pip install ./coder-install-wizard
+
+# Deploy (interactive)
+partner-coder-wizard
+
+# Tear down everything when done
+partner-coder-wizard teardown --cluster coder-2-37-0-partnerdemo --region us-west-2
+```
 
 ---
 
-## What this deploys
+## What It Does
+
+| Phase | Command | Description |
+|-------|---------|-------------|
+| **Pre-flight** | `preflight` | Validates AWS credentials, Bedrock model access, service quotas, and EKS cluster-name conflicts |
+| **Cost estimate** | `cost` | Per-team-size monthly breakdown with Fargate / EC2 Spot compute-lane split |
+| **Deploy** | `deploy` | Ordered two-stack deployment: image pipeline (CodeBuild → ECR) then core Coder stack, with real-time event streaming |
+| **Validate** | `validate` | Confirms Coder API, admin token, Premium license, AI providers, templates, both compute lanes, and EFS |
+| **Monitor** | `status` / `watch` | Check deployment status or stream CloudFormation events from any shell |
+| **Tear down** | `teardown` | Removes all deployment resources in the correct dependency order |
+
+---
+
+## What It Deploys
 
 | Capability | Detail |
 |---|---|
-| Coder control plane | **v2.37.0**, HA (2 replicas) when a Premium license is provided |
-| Compute lane 1 — **Fargate** | EKS Fargate profile `coder-workspaces`; pods labelled `compute=fargate`; Firecracker microVM isolation |
-| Compute lane 2 — **EC2 Spot** | EKS Auto Mode Spot NodePool `coder-ws-spot`; pods opt in via the template **Compute Lane** parameter; auto-scaled, scale-to-zero |
-| Storage standard | **Amazon EFS** per-workspace access point mounted at `/home/coder` in **both** lanes |
-| AI | Amazon Bedrock (native) + OpenAI-compatible Bedrock endpoint (`bedrock-runtime/openai/v1`) via Coder Agents |
+| Coder control plane | **v2.37.0**, HA (2 replicas) with a Premium license |
+| Compute lane 1 — **Fargate** | EKS Fargate profile `coder-workspaces`; Firecracker microVM isolation |
+| Compute lane 2 — **EC2 Spot** | EKS Auto Mode Spot NodePool `coder-ws-spot`; auto-scaled, scale-to-zero |
+| Storage | **Amazon EFS** per-workspace access point at `/home/coder` in both lanes |
+| AI | Amazon Bedrock (native Anthropic) + OpenAI-compatible endpoint via Coder Agents |
 
 ---
 
 ## Prerequisites
 
 - Python 3.10+
-- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) configured (`aws configure` or `aws sso login`)
-- IAM permissions to create EKS, VPC, Aurora, CloudFront, EFS, ECR, CodeBuild, IAM, Lambda, S3, and Secrets Manager resources
-  (S3 is used to stage the core template — see [Large templates](#large-templates))
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) configured
+- IAM permissions for EKS, VPC, Aurora, CloudFront, EFS, ECR, CodeBuild, IAM, Lambda, S3, and Secrets Manager
 - The `partner-ai-dlc-gitops` repository cloned locally
-- (Optional) `kubectl` — only used to validate the EC2 Spot NodePool post-install
+- (Optional) `kubectl` — only used to validate the EC2 Spot NodePool
+- (Optional) `eksctl` — used by `teardown` for clean EKS deletion; falls back to AWS CLI if absent
 
 ---
 
 ## Installation
 
 ```bash
-# From the repo root
-pip install ./coder-install-wizard
-# or for development
-pip install -e ./coder-install-wizard
-```
-
-Or run directly without installing:
-
-```bash
-python -m coder_wizard
+pip install ./coder-install-wizard        # from the repo root
+pip install -e ./coder-install-wizard     # editable / development
+python -m coder_wizard                    # or run directly without installing
 ```
 
 ---
 
-## Usage
+## Commands
 
-### Interactive wizard (recommended)
+### `wizard` — Interactive Install (default)
 
 ```bash
 partner-coder-wizard
 ```
 
-Asks a few questions (region, cluster, Coder version, team size, **Spot lane share**,
-admin user, **Premium license**), runs pre-flight, shows a cost estimate, and deploys.
+Walks you through region, cluster name, Coder version, team size, Spot lane
+share, admin credentials, and Premium license — then runs preflight, cost
+estimate, and deploys.
 
-### Sub-commands
+### `deploy` — Non-Interactive Install
 
 ```bash
-# Pre-flight checks only (fast — no deploy)
-partner-coder-wizard preflight --region us-east-1 --cluster coder-aws-cluster
-
-# Cost estimate for a 25-developer team with 40% of workspaces on the Spot lane
-partner-coder-wizard cost --developers 25 --spot-fraction 40 --region us-east-1
-
-# Fully non-interactive deploy (Premium license enables HA)
 partner-coder-wizard deploy \
   --region us-east-1 \
   --cluster coder-aws-cluster \
-  --coder-version 2.37.0 \
   --admin-email ops@example.com \
   --admin-user admin \
-  --admin-name "Platform Team" \
   --developers 20 \
   --spot-fraction 40 \
   --license-key "$CODER_LICENSE_JWT" \
   --yes
-
-# Generate parameter files + deploy.sh without creating resources
-partner-coder-wizard deploy --admin-email ops@example.com --dry-run
-
-# Validate an existing deployment
-partner-coder-wizard validate \
-  --coder-url  https://xxxx.cloudfront.net \
-  --cluster    coder-aws-cluster \
-  --efs-id     fs-0123456789abcdef0 \
-  --stack-name coder-aws-cluster-coder
-
-# Long install from a short-lived shell (e.g. CloudShell): launch + hand off
-partner-coder-wizard deploy --admin-email ops@example.com --no-wait
-
-# Check status / stream events later (from any shell)
-partner-coder-wizard status --cluster coder-aws-cluster
-partner-coder-wizard watch  --cluster coder-aws-cluster        # Ctrl-C safe
 ```
 
----
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--region` | current AWS CLI region | AWS region |
+| `--cluster` | `coder-aws-cluster` | EKS cluster name (use a new name for Blue/Green) |
+| `--coder-version` | `2.37.0` | Coder version to install |
+| `--admin-email` | *(required)* | Coder admin email |
+| `--admin-user` | `admin` | Coder admin username |
+| `--admin-password` | auto-generated | Stored in Secrets Manager |
+| `--license-key` | *(empty)* | Coder Premium JWT — enables HA + premium features |
+| `--developers` | `10` | Team size (cost estimate only) |
+| `--spot-fraction` | `0` | % of workspaces on the EC2 Spot lane (cost estimate only) |
+| `--dry-run` | | Generate parameter files + `deploy.sh` without creating resources |
+| `--no-wait` | | Submit the core stack and exit with monitoring links |
+| `--retry` | | Resume a failed deployment using saved parameters |
+| `--yes` | | Skip confirmation prompts |
 
-## Most commonly used input parameters
+### `teardown` — Remove All Resources
 
-The wizard captures the CloudFormation inputs teams change most often:
+```bash
+partner-coder-wizard teardown \
+  --cluster coder-2-37-0-partnerdemo \
+  --region us-west-2
+```
 
-| Wizard prompt / flag | CloudFormation parameter | Default |
-|---|---|---|
-| AWS region | (deploy region) | current AWS CLI region |
-| EKS cluster name | `EKSClusterName` | `coder-aws-cluster` |
-| Coder version | `CoderVersion` | `2.37.0` |
-| Kubernetes version | `KubernetesVersion` | `1.35` |
-| Admin email / user / full name | `CoderAdminEmail` / `CoderAdminUser` / `CoderAdminName` | `admin@example.com` / `admin` / `Coder Admin` |
-| Admin password | `CoderAdminPassword` | auto-generated → Secrets Manager |
-| Premium license key | `CoderLicenseKey` | empty (Community Edition) |
-| GitOps repo URL / branch | `CoderGitOpsTemplateRepoURL` / `GitRepoURL` / `GitBranch` | this repo / `main` |
-| Developers, Spot lane share | *(cost estimate only)* | `10`, `0%` |
+Discovers all resources belonging to the cluster, displays them, and
+(after confirmation) deletes them in the correct dependency order.
 
-> **Compute Lane** (`fargate` vs `spot`) is a **per-workspace template parameter**, not
-> a stack input — the Spot lane share here only affects the cost estimate. Both stacks
-> always provision both lanes.
+| Flag | Description |
+|------|-------------|
+| `--cluster` | EKS cluster name — the deployment identifier |
+| `--region` | AWS region |
+| `--delete-data` | Also delete retained Aurora database and EFS file system (**permanent data loss**) |
+| `--yes` | Skip confirmation prompts |
 
----
+**Deletion order:**
 
-## Pre-flight Checks
+| Step | Resource | Notes |
+|------|----------|-------|
+| 1 | EKS cluster | Includes Fargate profiles, nodegroups; via `eksctl` or AWS CLI fallback |
+| 2 | eksctl sub-stacks | Addon CSI drivers, cluster CloudFormation stack |
+| 3 | S3 buckets | CloudFront logs, NLB logs (emptied then deleted) |
+| 4 | Core Coder CFN stack | VPC, CloudFront, IAM roles, CodeBuild, KMS key |
+| 5 | ECR repositories | 4 workspace images (force-deleted with images) |
+| 6 | Image pipeline CFN stack | CodeBuild project, Lambda, IAM role |
+| 7 | Aurora cluster + instances | **Only with `--delete-data`** — skipped by default |
+| 8 | EFS file system | **Only with `--delete-data`** — mount targets removed first |
+| 9 | Secrets Manager | Admin password, session token, Bedrock API key (force-deleted) |
+| 10 | IAM users | Bedrock API key user (credentials + policies cleaned up first) |
+| 11 | Wizard staging bucket | `coder-wizard-templates-<account>-<region>` |
+
+> Aurora and EFS use `DeletionPolicy: Retain` in CloudFormation, so they
+> survive stack deletion by default. Pass `--delete-data` to explicitly
+> remove them — this is **irreversible**.
+
+### `preflight` — Pre-flight Checks
+
+```bash
+partner-coder-wizard preflight --region us-east-1 --cluster coder-aws-cluster
+```
 
 | Check | What it verifies |
 |---|---|
-| AWS Credentials | `sts get-caller-identity` — valid credentials exist |
-| AWS Region | Warns if deploying outside us-east-1 (Bedrock inference hardcoded there) |
-| Bedrock Model Access | Claude Opus 4.6, Claude Haiku 4.5, OpenAI GPT-5.6 Sol, xAI Grok 4.6 accessible |
-| Quota: EKS Clusters / VPCs / NAT Gateways / EIPs | Headroom for a fresh cluster |
-| Quota: Aurora ACUs | ≥ 40 Serverless v2 ACUs |
-| Quota: EC2 Spot Standard vCPUs | ≥ 32 (for the Spot workspace lane) |
-| EKS Cluster Name Conflict | No existing cluster with the same name (Blue/Green) |
-| ECR Workspace Images | All 3 `:latest` images exist (Step 1 complete) |
+| AWS Credentials | `sts get-caller-identity` succeeds |
+| AWS Region | Warns if deploying outside us-east-1 |
+| Bedrock Model Access | Claude Opus 4.6, Haiku 4.5, GPT-5.6 Sol, Grok 4.6 |
+| Service Quotas | EKS clusters, VPCs, NAT Gateways, EIPs, Aurora ACUs, EC2 Spot vCPUs |
+| EKS Cluster Name | No existing cluster with the same name |
+| ECR Images | Workspace images exist in ECR (skipped during deploy) |
 
----
+### `cost` — Cost Estimate
 
-## Post-Install Validation
+```bash
+partner-coder-wizard cost --developers 25 --spot-fraction 40 --region us-east-1
+```
+
+### `validate` — Post-Install Validation
+
+```bash
+partner-coder-wizard validate \
+  --coder-url https://xxxx.cloudfront.net \
+  --cluster coder-aws-cluster \
+  --efs-id fs-0123456789abcdef0 \
+  --stack-name coder-aws-cluster-coder
+```
 
 | Check | What it verifies |
 |---|---|
-| Coder API Reachable | `/api/v2/buildinfo` returns HTTP 200 |
-| Admin Session Token | `/api/v2/users/me` returns the admin user |
-| Coder Premium License | A license is applied (HA + premium features enabled) |
-| Coder AI Providers | At least one provider enabled (bedrock + openai-compat) |
-| Workspace Templates | At least one active template deployed via GitOps |
-| Fargate Lane (profile) | `coder-workspaces` Fargate profile is ACTIVE |
-| Spot Lane (NodePool) | Auto Mode NodePool `coder-ws-spot` present (via kubectl if available) |
+| Coder API | `/api/v2/buildinfo` returns HTTP 200 |
+| Admin Token | `/api/v2/users/me` returns the admin user |
+| Premium License | License applied (HA + premium enabled) |
+| AI Providers | At least one provider enabled (bedrock + openai-compat) |
+| Templates | At least one active template deployed |
+| Fargate Lane | `coder-workspaces` Fargate profile is ACTIVE |
+| Spot Lane | `coder-ws-spot` NodePool present (requires kubectl) |
 | EFS CSI Driver | `aws-efs-csi-driver` addon is ACTIVE |
 | EFS File System | EFS is in `available` state |
 
----
-
-## Large templates
-
-`infrastructure/coder_deployment.yaml` exceeds CloudFormation's **51,200-byte inline
-`--template-body` limit** (it is ~57 KB). A raw `aws cloudformation create-stack
---template-body file://...` therefore fails with:
-
-```
-'templateBody' failed to satisfy constraint: Member must have length less than or equal to 51200
-```
-
-The wizard handles this automatically: `deploy` (and the generated `deploy.sh`) inline
-small templates with `--template-body`, but stage anything over the limit to a private,
-public-access-blocked S3 bucket (`coder-wizard-templates-<account>-<region>`) and deploy
-with `--template-url`. This is why the caller needs S3 permissions
-(`s3:CreateBucket`, `s3:PutObject`, `s3:GetObject`, `s3:PutBucketPublicAccessBlock`,
-`s3:PutEncryptionConfiguration`, `s3:PutLifecycleConfiguration`).
-
-On creation the staging bucket is hardened (best-effort — missing permissions are
-skipped, not fatal):
-
-- **Encryption:** SSE-S3 (`AES256`) by default. Set `CODER_WIZARD_TEMPLATE_KMS_KEY_ARN`
-  to a CMK ARN to use SSE-KMS with an S3 Bucket Key instead (the caller then also needs
-  `kms:GenerateDataKey`/`kms:Decrypt` on that key).
-- **Lifecycle:** staged templates are transient, so objects expire after **7 days** and
-  incomplete multipart uploads are aborted after 1 day.
-
-## Re-running the wizard
-
-`deploy` is safe to re-run. Before Step 3 it checks the image pipeline stack
-(`<cluster>-image-pipeline`) and:
-
-- **healthy** (`CREATE_COMPLETE` / `UPDATE_COMPLETE`) — skips the image build and goes
-  straight to the core stack (images are already in ECR);
-- **failed / unusable** (`ROLLBACK_COMPLETE`, `CREATE_FAILED`, `REVIEW_IN_PROGRESS`, …)
-  — deletes the stack and recreates it;
-- **in progress** (`*_IN_PROGRESS`) — stops and asks you to wait for the current
-  operation to finish, then re-run.
-
-To force a rebuild of a healthy pipeline, delete the stack or re-run its CodeBuild
-project (`<cluster>-workspace-image-build`).
-
-The **core stack** is assessed the same way before Step 4: healthy → skip and validate
-the existing deployment; failed/unusable → delete and recreate; in progress → stop.
-
-**Rollback is disabled for the core stack** (`--on-failure DO_NOTHING`): a failed create
-is left in place so Aurora/EFS (both `DeletionPolicy: Retain`) and the EKS cluster survive
-for diagnosis or retry, instead of a rollback that would also fail on the shared VPC.
-Because of this, if the core stack is in a failed state **and its EKS cluster still
-exists**, the wizard will **not** auto-delete it (that delete would hit a VPC
-`DependencyViolation`); it prints an `eksctl delete cluster` + `delete-stack` runbook
-instead.
-
-## Long installs & short-lived shells (CloudShell)
-
-The core stack takes ~35–45 minutes, longer than an idle AWS CloudShell session. The
-deployment itself runs server-side (CloudFormation + CodeBuild), so a dropped shell does
-**not** stop it — only the wizard's live view goes away. The wizard is built for this:
-
-- **Durable links on submit.** The moment each stack is created, the wizard prints its
-  CloudFormation events URL, CodeBuild console URL + `aws logs tail` command, a status
-  one-liner, and a **"safe to close this shell"** note.
-- **`--no-wait` (hand-off).** `deploy --no-wait` submits the core stack, prints the links,
-  and exits immediately instead of blocking. Finish with `deploy --retry` (validates +
-  prints the summary once the stack is `CREATE_COMPLETE`).
-- **Ctrl-C is safe.** Interrupting the live event stream detaches the wizard, not the
-  deployment; it prints how to reattach.
-- **Reattach from any shell:**
-  - `partner-coder-wizard status --cluster <name>` — one-shot status + console links for
-    both stacks.
-  - `partner-coder-wizard watch --cluster <name>` (or `--stack <name>`) — stream events
-    until the stack finishes (Ctrl-C safe).
-  - `partner-coder-wizard deploy --retry` — once the core stack is complete, this resolves
-    to "skip → validate" and prints the post-install summary.
-
-## Resuming a failed deployment (`--retry`)
-
-Every live `deploy` saves its **non-secret** parameters to
-`~/.coder-wizard/last-deploy.json`. If a run fails partway (e.g. a CodeBuild error),
-resume it without re-entering anything:
+### `status` / `watch` — Monitor Deployments
 
 ```bash
-partner-coder-wizard deploy --retry      # non-interactive
-partner-coder-wizard --retry             # or answer the wizard's "Resume?" prompt
+partner-coder-wizard status --cluster coder-aws-cluster       # one-shot status + links
+partner-coder-wizard watch  --cluster coder-aws-cluster       # stream events (Ctrl-C safe)
 ```
 
-On retry the wizard:
+---
 
-1. reloads the last parameters (region, cluster, versions, admin identity, git repo,
-   developers/Spot split) — secrets are **not** stored (see below);
-2. assesses the **image-pipeline** and **core** stacks and picks up where it left off
-   (skip healthy, delete+recreate failed, wait on in-progress);
-3. deploys the core stack with **`RetryFlag=True`**, so the CloudFormation buildspec
-   reuses the existing EKS cluster and CloudFront distribution (via its idempotency
-   checks) and skips the one-time first-user creation and license application.
+## Operational Notes
 
-Secrets are intentionally omitted from the state file: the admin password lives in
-Secrets Manager and the license is already applied, and `RetryFlag=True` skips the
-steps that would consume them. Provide `--license-key` again only if you specifically
-need to re-apply a license.
+### Re-running the wizard
 
-## Architecture of the Wizard
+`deploy` is safe to re-run. It checks each stack before creating it:
+
+- **Healthy** — skips the stack and moves on
+- **Failed** — deletes and recreates (unless an EKS cluster blocks VPC deletion)
+- **In progress** — asks you to wait and re-run
+
+### Resuming a failed deployment
+
+Every live deploy saves non-secret parameters to `~/.coder-wizard/last-deploy.json`.
+Resume without re-entering anything:
+
+```bash
+partner-coder-wizard deploy --retry
+```
+
+On retry the wizard reloads saved parameters, assesses both stacks, and
+deploys the core stack with `RetryFlag=True` (reuses the existing EKS
+cluster, CloudFront, and skips first-user creation).
+
+### Long installs & short-lived shells
+
+The core stack takes ~35–45 minutes. The deployment runs server-side
+(CloudFormation + CodeBuild), so a dropped shell does **not** stop it.
+
+- `deploy --no-wait` submits and exits with monitoring links
+- `Ctrl-C` detaches the wizard, not the deployment
+- Reattach from any shell with `status`, `watch`, or `deploy --retry`
+
+### Large templates
+
+`coder_deployment.yaml` (~60 KB) exceeds CloudFormation's 51,200-byte
+inline limit. The wizard auto-stages it to a private S3 bucket
+(`coder-wizard-templates-<account>-<region>`) and deploys with
+`--template-url`. Set `CODER_WIZARD_TEMPLATE_KMS_KEY_ARN` for SSE-KMS
+encryption instead of the default SSE-S3.
+
+---
+
+## Architecture
 
 ```
 coder_wizard/
-├── __main__.py       ← CLI entry point, wizard UI, sub-command dispatch (incl. status/watch)
-├── preflight.py      ← Pre-flight check suite (credentials, quotas, Bedrock, Spot, ECR)
+├── __main__.py       ← CLI entry point, wizard UI, sub-command dispatch
+├── preflight.py      ← Pre-flight check suite (credentials, quotas, Bedrock, ECR)
 ├── deploy.py         ← CloudFormation deploy orchestrator + CodeBuild waiter
-├── validate.py       ← Post-install validation (Coder API, license, both lanes, EFS)
+├── validate.py       ← Post-install validation (Coder API, license, lanes, EFS)
 ├── cost_estimate.py  ← Monthly cost estimator (Fargate + EC2 Spot split)
 ├── dryrun.py         ← Parameter-file + deploy.sh generator (no AWS calls)
-└── summary.py        ← install-summary.json writer + human-readable summary
+├── summary.py        ← install-summary.json writer + human-readable output
+└── teardown.py       ← Resource discovery + ordered teardown orchestrator
 ```
 
 ---
 
 ## Roadmap
 
+- [x] ~~Uninstall wizard with ordered resource cleanup~~ → `teardown` command
 - [ ] Query live Bedrock token consumption post-install for actual AI spend
-- [ ] Detect running Coder version and offer an in-place upgrade path (e.g. 2.36 → 2.37)
+- [ ] Detect running Coder version and offer an in-place upgrade path
 - [ ] Per-lane cost breakdown from real instance-type Spot prices
-- [ ] Uninstall wizard with ordered resource cleanup (Blue/Green teardown of the old stack)
