@@ -50,15 +50,39 @@ Benefits over the raw API calls:
 
 | Provider (`coderd_ai_provider`) | Type | Notes |
 |---|---|---|
-| `bedrock` | `bedrock` | Native Bedrock; credentials via EKS Pod Identity (no static keys). Routes `model` + `small_fast_model`. |
-| `openai-compat` | `openai` | Amazon Bedrock **native OpenAI endpoint** (`bedrock-runtime/openai/v1`); authenticated with a write-only Amazon Bedrock API key. |
+| `bedrock` | `bedrock` | Native Bedrock (Anthropic Messages API); credentials via EKS Pod Identity (no static keys). Routes `model` + `small_fast_model`. |
+| `openai-compat` | `openai` | Amazon Bedrock **native OpenAI endpoint** (`bedrock-runtime/openai/v1`); authenticated with a write-only Amazon Bedrock API key. Serves models from OpenAI, xAI, Mistral, DeepSeek, Qwen, Moonshot, MiniMax, NVIDIA, and Google via Chat Completions. |
 
-| Model (`coderd_agents_model`) | Provider | Default |
-|---|---|---|
-| Claude Opus 4.6 | bedrock | ✅ (`coderd_agents_default_model`) |
-| Claude Haiku 4.5 | bedrock | |
-| OpenAI GPT-5.6 Sol (`us.openai.gpt-5.6-sol`) | openai-compat | |
-| xAI Grok 4.6 (`us.xai.grok-4.6`) | openai-compat | |
+All `openai-compat` models have been validated for **tool/function calling** and
+**streaming** — the two hard requirements for Coder Agents — against the Bedrock
+`bedrock-runtime` `/openai/v1/chat/completions` endpoint.
+
+### Bedrock native models
+
+| Model (`coderd_agents_model`) | Model ID | Context | Max Output | Default |
+|---|---|---|---|---|
+| Claude Opus 4.6 | `global.anthropic.claude-opus-4-6-v1` | 1M | 128K | ✅ (`coderd_agents_default_model`) |
+| Claude Haiku 4.5 | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | 200K | 64K | |
+
+### OpenAI-compatible models (Bedrock `/openai/v1`)
+
+| Model (`coderd_agents_model`) | Model ID | Context | Max Output | Notes |
+|---|---|---|---|---|
+| OpenAI GPT-5.6 Sol | `us.openai.gpt-5.6-sol` | 400K | 128K | Cross-region (CRIS). Frontier reasoning + agentic coding. |
+| OpenAI GPT-5.6 Terra | `us.openai.gpt-5.6-terra` | 1M | 128K | Cross-region. Balanced cost/performance. |
+| OpenAI GPT-5.6 Luna | `us.openai.gpt-5.6-luna` | 1M | 128K | Cross-region. Fast, lowest cost. |
+| OpenAI GPT-OSS 120B | `openai.gpt-oss-120b-1:0` | 128K | 16K | Open-source 120B. In-region. |
+| OpenAI GPT-OSS 20B | `openai.gpt-oss-20b-1:0` | 128K | 16K | Open-source 20B. In-region, lightweight. |
+| xAI Grok 4.6 | `us.xai.grok-4.6` | 256K | 32K | Cross-region. Reasoning model. |
+| Mistral Large 3 (675B) | `mistral.mistral-large-3-675b-instruct` | 128K | 32K | Mistral's flagship. |
+| Mistral Devstral 2 (123B) | `mistral.devstral-2-123b` | 128K | 32K | Coding-focused. |
+| DeepSeek V3.2 | `deepseek.v3.2` | 128K | 32K | Strong reasoning + code. |
+| Qwen3 Coder Next | `qwen.qwen3-coder-next` | 128K | 32K | Coding-specialized. |
+| Qwen3 32B | `qwen.qwen3-32b-v1:0` | 128K | 32K | General-purpose. |
+| Moonshot Kimi K2 Thinking | `moonshot.kimi-k2-thinking` | 128K | 32K | Reasoning with chain-of-thought. |
+| MiniMax M2.5 | `minimax.minimax-m2.5` | 128K | 32K | General-purpose. |
+| NVIDIA Nemotron Super 3 120B | `nvidia.nemotron-super-3-120b` | 262K | — | 120B-parameter model. |
+| Google Gemma 3 12B IT | `google.gemma-3-12b-it` | 128K | — | Lightweight 12B. |
 
 ## Usage (mirrors `templates/templates_gitops.sh`)
 
