@@ -1,22 +1,33 @@
 """
-Tear-down orchestrator — removes all resources created by the install wizard
+Tear-down orchestrator - removes all resources created by the install wizard
 in the correct dependency order.
 
-Deletion order (reverse of creation):
-  1. EKS cluster (eksctl delete cluster) — removes the cluster, its managed
+Deletion order (dependencies removed before the resources that block on them):
+  1. EKS cluster (eksctl delete cluster) - removes the cluster, its managed
      eksctl sub-stacks (addons, nodegroups), the Fargate profile, load
      balancers, and ENIs that block VPC deletion.
-  2. Core Coder CloudFormation stack ({cluster}-coder) — removes the VPC,
-     Aurora (if not retained), EFS (if not retained), CloudFront, Secrets
-     Manager, IAM roles, KMS key, CodeBuild project, and S3 buckets.
-  3. Image pipeline stack ({cluster}-image-pipeline) — removes ECR repos
-     (with images) and the image-build CodeBuild project.
-  4. Retained resources (optional) — Aurora cluster and EFS file system use
-     DeletionPolicy: Retain, so they survive stack deletion. The teardown
-     offers to delete them explicitly.
-  5. S3 buckets — CFN cannot delete non-empty buckets. The teardown empties
-     and deletes them.
-  6. Wizard staging bucket (coder-wizard-templates-{account}-{region}).
+  2. S3 buckets (except the wizard staging bucket) - CloudFormation cannot
+     delete non-empty buckets, so they are emptied and deleted first.
+  3. IAM users (Bedrock API-key user) - the user carries a service-specific
+     credential created out of band (not tracked by CloudFormation), so its
+     credentials/policies are stripped and the user deleted BEFORE the core
+     stack; otherwise CloudFormation cannot delete the user.
+  4. Aurora cluster/instance (only with --delete-data) - uses DeletionPolicy:
+     Retain, so it is deleted BEFORE the core stack; otherwise the running
+     instance blocks the (non-retained) DB subnet group + security group.
+  5. Core Coder CloudFormation stack ({cluster}-coder) - removes the VPC,
+     subnets, CloudFront, Secrets Manager, IAM roles, KMS key, CodeBuild
+     project, etc. On DELETE_FAILED it retries while retaining any resource it
+     still cannot delete, so the stack reaches DELETE_COMPLETE and the retained
+     resources are surfaced as warnings.
+  6. Image pipeline stack ({cluster}-image-pipeline) and ECR repos.
+  7. Retained EFS file system (only with --delete-data).
+  8. Leftover Secrets Manager secrets.
+  9. Wizard staging bucket (coder-wizard-templates-{account}-{region}), last.
+
+Resources with DeletionPolicy: Retain (Aurora, EFS) survive stack deletion by
+design; pass --delete-data to remove them (and their stack-managed network
+dependencies) as part of the teardown.
 """
 
 from __future__ import annotations
@@ -356,64 +367,121 @@ def _delete_eks_cluster_cli(
     return step
 
 
+def _stack_failed_resources(stack_name: str, region: str) -> list[str]:
+    """Return the logical IDs of resources currently in DELETE_FAILED."""
+    code, out, _ = _aws([
+        "cloudformation", "list-stack-resources",
+        "--stack-name", stack_name, "--region", region,
+    ])
+    ids: list[str] = []
+    if code == 0:
+        try:
+            for r in json.loads(out).get("StackResourceSummaries", []):
+                if r.get("ResourceStatus") == "DELETE_FAILED":
+                    ids.append(r["LogicalResourceId"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return ids
+
+
 def _delete_cfn_stack(
     stack_name: str, region: str,
     on_status: Callable[[str], None] | None = None,
     retain_resources: list[str] | None = None,
+    auto_retain_on_failure: bool = False,
 ) -> TeardownStep:
-    """Delete a CloudFormation stack and wait for completion."""
+    """Delete a CloudFormation stack and wait for completion.
+
+    When ``auto_retain_on_failure`` is set, a stack that reaches DELETE_FAILED is
+    retried with ``--retain-resources`` set to the resources that could not be
+    deleted (accumulated across attempts). This lets the stack reach
+    DELETE_COMPLETE even when a few resources are un-deletable by CloudFormation
+    (e.g. an IAM user with an out-of-band service-specific credential, or
+    resources that depend on a retained Aurora cluster). Retained resource IDs
+    are reported in ``step.detail`` so the caller can surface them.
+    """
     step = TeardownStep(name=f"CFN stack: {stack_name}", status="running")
     if on_status:
         on_status(f"Deleting CloudFormation stack '{stack_name}'...")
 
-    delete_args = [
-        "cloudformation", "delete-stack",
-        "--stack-name", stack_name,
-        "--region", region,
-    ]
-    if retain_resources:
-        delete_args += ["--retain-resources"] + retain_resources
+    retained: list[str] = list(retain_resources or [])
+    max_attempts = 5 if auto_retain_on_failure else 1
 
-    code, _, err = _aws(delete_args)
-    if code != 0:
-        if "does not exist" in err:
-            step.status = "skipped"
-            step.message = "Stack does not exist"
+    for attempt in range(max_attempts):
+        delete_args = [
+            "cloudformation", "delete-stack",
+            "--stack-name", stack_name,
+            "--region", region,
+        ]
+        if retained:
+            delete_args += ["--retain-resources"] + retained
+
+        code, _, err = _aws(delete_args)
+        if code != 0:
+            if "does not exist" in err:
+                step.status = "skipped"
+                step.message = "Stack does not exist"
+                return step
+            step.status = "failed"
+            step.message = f"delete-stack failed: {err[:200]}"
             return step
+
+        # Wait for deletion
+        if on_status:
+            on_status(f"  Waiting for stack '{stack_name}' to be deleted...")
+        status = ""
+        for _ in range(180):  # up to 45 min
+            c, out, _ = _aws([
+                "cloudformation", "describe-stacks",
+                "--stack-name", stack_name, "--region", region,
+            ])
+            if c != 0:
+                status = "DELETE_COMPLETE"  # stack no longer exists
+                break
+            try:
+                status = json.loads(out).get("Stacks", [{}])[0].get("StackStatus", "")
+            except (json.JSONDecodeError, IndexError):
+                status = ""
+            if status in ("DELETE_COMPLETE", "DELETE_FAILED"):
+                break
+            time.sleep(15)
+
+        if status == "DELETE_COMPLETE":
+            step.status = "ok"
+            if retained:
+                step.message = f"Deleted (retained {len(retained)} un-deletable resource(s))"
+                step.detail = "Retained: " + ", ".join(sorted(set(retained)))
+            else:
+                step.message = "Deleted"
+            return step
+
+        if status == "DELETE_FAILED":
+            failed = _stack_failed_resources(stack_name, region)
+            if not auto_retain_on_failure or attempt == max_attempts - 1:
+                step.status = "failed"
+                step.message = "Stack deletion failed (status: DELETE_FAILED)"
+                step.detail = (
+                    "Resources that could not be deleted: " + ", ".join(failed)
+                    if failed else
+                    "Check the CloudFormation console for resources that could not be deleted."
+                )
+                return step
+            newly = [x for x in failed if x not in retained]
+            if not newly:
+                step.status = "failed"
+                step.message = "Stack deletion failed (no further resources to retain)"
+                step.detail = "Stuck resources: " + ", ".join(failed) if failed else None
+                return step
+            retained += newly
+            if on_status:
+                on_status(f"  Retrying delete, retaining stuck resource(s): {', '.join(newly)}")
+            continue
+
+        # Timed out waiting
         step.status = "failed"
-        step.message = f"delete-stack failed: {err[:200]}"
+        step.message = "Timed out waiting for stack deletion"
         return step
 
-    # Wait for deletion
-    if on_status:
-        on_status(f"  Waiting for stack '{stack_name}' to be deleted...")
-    for _ in range(180):  # up to 45 min
-        c, out, _ = _aws([
-            "cloudformation", "describe-stacks",
-            "--stack-name", stack_name, "--region", region,
-        ])
-        if c != 0:
-            # Stack no longer exists
-            step.status = "ok"
-            step.message = "Deleted"
-            return step
-        try:
-            status = json.loads(out).get("Stacks", [{}])[0].get("StackStatus", "")
-            if status == "DELETE_COMPLETE":
-                step.status = "ok"
-                step.message = "Deleted"
-                return step
-            if status == "DELETE_FAILED":
-                step.status = "failed"
-                step.message = f"Stack deletion failed (status: DELETE_FAILED)"
-                step.detail = "Check the CloudFormation console for resources that could not be deleted."
-                return step
-        except (json.JSONDecodeError, IndexError):
-            pass
-        time.sleep(15)
-
-    step.status = "failed"
-    step.message = "Timed out waiting for stack deletion"
     return step
 
 
@@ -761,11 +829,50 @@ def run_teardown(
         step = _empty_and_delete_bucket(bucket, region, on_status)
         result.steps.append(step)
 
-    # ── 4. Delete core Coder stack ─────────────────────────────────────────
+    # ── 4. Clean up IAM users BEFORE the core stack ────────────────────────
+    #     The Bedrock API-key user carries a service-specific credential created
+    #     out of band (not tracked by CloudFormation), so CFN cannot delete the
+    #     user while it exists. Strip the user's credentials/policies (and delete
+    #     the user) first so the core stack delete does not fail on it. If we lack
+    #     IAM permissions here, the stack delete below will retain the user and
+    #     continue (see auto_retain_on_failure).
+    for user in resources["iam_users"]:
+        step = _delete_iam_user(user["name"], on_status)
+        result.steps.append(step)
+        if step.status == "failed":
+            result.warnings.append(
+                f"Could not fully clean up IAM user '{user['name']}'. If it blocks "
+                f"stack deletion it will be retained; remove it manually with:\n"
+                f"  aws iam delete-user --user-name {user['name']}"
+            )
+
+    # ── 5. Delete retained Aurora BEFORE the core stack (only --delete-data) ─
+    #     Aurora cluster/instance use DeletionPolicy: Retain, so the stack delete
+    #     skips them - but the (non-retained) DB subnet group and security group
+    #     depend on the running instance and fail to delete while it exists.
+    #     Deleting Aurora up front lets those dependents delete cleanly. Without
+    #     --delete-data, Aurora and its dependent subnet group/security group are
+    #     left in place (the stack delete below retains whatever it cannot remove).
+    if delete_data:
+        for aurora in resources["aurora_clusters"]:
+            step = _delete_aurora(
+                aurora["id"], aurora.get("instances", []), region, on_status,
+            )
+            result.steps.append(step)
+    else:
+        for aurora in resources["aurora_clusters"]:
+            result.steps.append(TeardownStep(
+                name=f"Aurora: {aurora['id']}", status="skipped",
+                message="Retained (use --delete-data to remove)",
+            ))
+
+    # ── 6. Delete core Coder stack ─────────────────────────────────────────
     core_stack = f"{cluster}-coder"
     core_found = any(s["name"] == core_stack for s in resources["cfn_stacks"])
     if core_found:
-        step = _delete_cfn_stack(core_stack, region, on_status)
+        step = _delete_cfn_stack(
+            core_stack, region, on_status, auto_retain_on_failure=True,
+        )
         result.steps.append(step)
         if step.status == "failed":
             result.success = False
@@ -773,18 +880,23 @@ def run_teardown(
                 f"Core stack deletion failed. Try deleting manually:\n"
                 f"  aws cloudformation delete-stack --stack-name {core_stack} --region {region}"
             )
+        elif step.detail and step.detail.startswith("Retained:"):
+            result.warnings.append(
+                f"Core stack deleted, but some resources could not be removed and "
+                f"were retained ({step.detail}). Remove them manually."
+            )
     else:
         result.steps.append(TeardownStep(
             name=f"CFN stack: {core_stack}", status="skipped",
             message="Stack not found",
         ))
 
-    # ── 5. Delete ECR repos ────────────────────────────────────────────────
+    # ── 7. Delete ECR repos ────────────────────────────────────────────────
     for repo in resources["ecr_repos"]:
         step = _delete_ecr_repo(repo["name"], region, on_status)
         result.steps.append(step)
 
-    # ── 6. Delete image pipeline stack ─────────────────────────────────────
+    # ── 8. Delete image pipeline stack ─────────────────────────────────────
     pipeline_stack = f"{cluster}-image-pipeline"
     pipeline_found = any(s["name"] == pipeline_stack for s in resources["cfn_stacks"])
     if pipeline_found:
@@ -798,40 +910,24 @@ def run_teardown(
             message="Stack not found",
         ))
 
-    # ── 7. Retained resources (Aurora + EFS) ───────────────────────────────
+    # ── 9. Retained EFS (only with --delete-data) ──────────────────────────
     if delete_data:
-        for aurora in resources["aurora_clusters"]:
-            step = _delete_aurora(
-                aurora["id"], aurora.get("instances", []), region, on_status,
-            )
-            result.steps.append(step)
-
         for efs in resources["efs_filesystems"]:
             step = _delete_efs(efs["id"], region, on_status)
             result.steps.append(step)
     else:
-        for aurora in resources["aurora_clusters"]:
-            result.steps.append(TeardownStep(
-                name=f"Aurora: {aurora['id']}", status="skipped",
-                message="Retained (use --delete-data to remove)",
-            ))
         for efs in resources["efs_filesystems"]:
             result.steps.append(TeardownStep(
                 name=f"EFS: {efs['id']}", status="skipped",
                 message="Retained (use --delete-data to remove)",
             ))
 
-    # ── 8. Secrets Manager ─────────────────────────────────────────────────
+    # ── 10. Secrets Manager ────────────────────────────────────────────────
     if resources["secrets"]:
         step = _delete_secrets(resources["secrets"], region, on_status)
         result.steps.append(step)
 
-    # ── 9. IAM users (Bedrock API key user) ────────────────────────────────
-    for user in resources["iam_users"]:
-        step = _delete_iam_user(user["name"], on_status)
-        result.steps.append(step)
-
-    # ── 10. Wizard staging bucket (last) ───────────────────────────────────
+    # ── 11. Wizard staging bucket (last) ───────────────────────────────────
     for bucket_info in resources["s3_buckets"]:
         bucket = bucket_info["name"]
         if "wizard-templates" in bucket:
