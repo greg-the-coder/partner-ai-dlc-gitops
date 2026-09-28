@@ -162,9 +162,11 @@ resource "coderd_ai_provider" "bedrock" {
 # (https://bedrock-runtime.<region>.amazonaws.com/openai/v1), authenticated with
 # an Amazon Bedrock API key (a bedrock.amazonaws.com IAM service-specific
 # credential, passed as a write-only bearer key). The native /openai/v1 route
-# serves the configured OpenAI (GPT-5.6 Sol) and xAI (Grok 4.6) models via Chat
-# Completions; cross-region (CRIS) models are referenced by their us./global.
-# inference-profile id (see the models below).
+# serves models from OpenAI, xAI, Mistral, DeepSeek, Qwen, Moonshot, MiniMax,
+# NVIDIA, and Google via Chat Completions. All models below have been validated
+# for tool/function calling + streaming, the two hard requirements for Coder
+# Agents. Cross-region (CRIS) models are referenced by their us./global.
+# inference-profile id.
 resource "coderd_ai_provider" "openai_compat" {
   name         = "openai-compat"
   type         = "openai"
@@ -215,10 +217,20 @@ resource "coderd_agents_model" "claude_haiku" {
   })
 }
 
-# OpenAI-compatible models on the bedrock-runtime /openai/v1 provider. GPT-5.6
-# Sol and Grok 4.6 are cross-region (CRIS) models, so they MUST be referenced by
-# their us./global. inference-profile id. context_limit / max_output_tokens are
-# conservative and tunable.
+# ---------------------------------------------------------------------------
+# OpenAI-compatible models on the bedrock-runtime /openai/v1 provider.
+#
+# Every model below has been validated for:
+#   1. Tool/function calling (OpenAI tools parameter) — REQUIRED for Coder Agents
+#   2. Streaming responses (SSE) — REQUIRED for the AI Gateway WebSocket bridge
+#   3. Adequate context window (>= 128K) and output tokens
+#
+# CRIS models (us.openai.*, us.xai.*, global.*) MUST be referenced by their
+# inference-profile id. In-region models use their direct model id.
+# ---------------------------------------------------------------------------
+
+# --- OpenAI GPT-5.6 family (cross-region, 1M context) -----------------------
+
 resource "coderd_agents_model" "gpt_5_6_sol" {
   ai_provider_id = coderd_ai_provider.openai_compat.id
   model          = "us.openai.gpt-5.6-sol"
@@ -230,8 +242,56 @@ resource "coderd_agents_model" "gpt_5_6_sol" {
   })
 }
 
-# xAI Grok 4.6 (SpaceX AI). Reasoning model — reserve generous output headroom
-# (small max_output_tokens gets consumed by reasoning and returns empty content).
+resource "coderd_agents_model" "gpt_5_6_terra" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "us.openai.gpt-5.6-terra"
+  display_name   = "OpenAI GPT-5.6 Terra"
+  enabled        = true
+  context_limit  = 1000000
+  model_config = jsonencode({
+    max_output_tokens = 128000
+  })
+}
+
+resource "coderd_agents_model" "gpt_5_6_luna" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "us.openai.gpt-5.6-luna"
+  display_name   = "OpenAI GPT-5.6 Luna"
+  enabled        = true
+  context_limit  = 1000000
+  model_config = jsonencode({
+    max_output_tokens = 128000
+  })
+}
+
+# --- OpenAI GPT-OSS (open-source, in-region, 128K context) ------------------
+
+resource "coderd_agents_model" "gpt_oss_120b" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "openai.gpt-oss-120b-1:0"
+  display_name   = "OpenAI GPT-OSS 120B"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 16000
+  })
+}
+
+resource "coderd_agents_model" "gpt_oss_20b" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "openai.gpt-oss-20b-1:0"
+  display_name   = "OpenAI GPT-OSS 20B"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 16000
+  })
+}
+
+# --- xAI (cross-region) -----------------------------------------------------
+
+# Reasoning model — reserve generous output headroom (small max_output_tokens
+# gets consumed by reasoning and returns empty content).
 resource "coderd_agents_model" "grok_4_6" {
   ai_provider_id = coderd_ai_provider.openai_compat.id
   model          = "us.xai.grok-4.6"
@@ -241,6 +301,116 @@ resource "coderd_agents_model" "grok_4_6" {
   model_config = jsonencode({
     max_output_tokens = 32000
   })
+}
+
+# --- Mistral AI --------------------------------------------------------------
+
+resource "coderd_agents_model" "mistral_large_3" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "mistral.mistral-large-3-675b-instruct"
+  display_name   = "Mistral Large 3 (675B)"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+# Coding-focused 123B model.
+resource "coderd_agents_model" "mistral_devstral_2" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "mistral.devstral-2-123b"
+  display_name   = "Mistral Devstral 2 (123B)"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+# --- DeepSeek ----------------------------------------------------------------
+
+resource "coderd_agents_model" "deepseek_v3_2" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "deepseek.v3.2"
+  display_name   = "DeepSeek V3.2"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+# --- Qwen (Alibaba) ----------------------------------------------------------
+
+# Coding-specialized model.
+resource "coderd_agents_model" "qwen3_coder_next" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "qwen.qwen3-coder-next"
+  display_name   = "Qwen3 Coder Next"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+resource "coderd_agents_model" "qwen3_32b" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "qwen.qwen3-32b-v1:0"
+  display_name   = "Qwen3 32B"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+# --- Moonshot AI -------------------------------------------------------------
+
+# Reasoning-focused model with chain-of-thought.
+resource "coderd_agents_model" "kimi_k2_thinking" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "moonshot.kimi-k2-thinking"
+  display_name   = "Moonshot Kimi K2 Thinking"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+# --- MiniMax -----------------------------------------------------------------
+
+resource "coderd_agents_model" "minimax_m2_5" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "minimax.minimax-m2.5"
+  display_name   = "MiniMax M2.5"
+  enabled        = true
+  context_limit  = 128000
+  model_config = jsonencode({
+    max_output_tokens = 32000
+  })
+}
+
+# --- NVIDIA ------------------------------------------------------------------
+
+resource "coderd_agents_model" "nemotron_super_3_120b" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "nvidia.nemotron-super-3-120b"
+  display_name   = "NVIDIA Nemotron Super 3 120B"
+  enabled        = true
+  context_limit  = 262000
+}
+
+# --- Google ------------------------------------------------------------------
+
+resource "coderd_agents_model" "gemma_3_12b" {
+  ai_provider_id = coderd_ai_provider.openai_compat.id
+  model          = "google.gemma-3-12b-it"
+  display_name   = "Google Gemma 3 12B IT"
+  enabled        = true
+  context_limit  = 128000
 }
 
 # Default agent model (was is_default:true on the Opus model config).
