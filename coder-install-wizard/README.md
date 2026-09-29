@@ -136,14 +136,22 @@ Discovers all resources belonging to the cluster, displays them, and
 | 1 | EKS cluster | Includes Fargate profiles, nodegroups; via `eksctl` or AWS CLI fallback |
 | 2 | eksctl sub-stacks | Addon CSI drivers, cluster CloudFormation stack |
 | 3 | S3 buckets | CloudFront logs, NLB logs (emptied then deleted) |
-| 4 | Core Coder CFN stack | VPC, CloudFront, IAM roles, CodeBuild, KMS key |
-| 5 | ECR repositories | 4 workspace images (force-deleted with images) |
-| 6 | Image pipeline CFN stack | CodeBuild project, Lambda, IAM role |
-| 7 | Aurora cluster + instances | **Only with `--delete-data`** — skipped by default |
-| 8 | EFS file system | **Only with `--delete-data`** — mount targets removed first |
-| 9 | Secrets Manager | Admin password, session token, Bedrock API key (force-deleted) |
-| 10 | IAM users | Bedrock API key user (credentials + policies cleaned up first) |
+| 4 | IAM users | Bedrock API key user — credentials (incl. the out-of-band service-specific credential) + policies removed **before** the core stack so CloudFormation can delete the user |
+| 5 | Aurora cluster + instances | **Only with `--delete-data`** — deleted **before** the core stack so the DB subnet group + security group can be removed; skipped (retained) by default |
+| 6 | Core Coder CFN stack | VPC, subnets, CloudFront, IAM roles, CodeBuild, KMS key. On `DELETE_FAILED` it retries, retaining any resource it still cannot delete, and reports them |
+| 7 | ECR repositories | 4 workspace images (force-deleted with images) |
+| 8 | Image pipeline CFN stack | CodeBuild project, Lambda, IAM role |
+| 9 | EFS file system | **Only with `--delete-data`** — mount targets removed first |
+| 10 | Secrets Manager | Any leftover admin password, session token, Bedrock API key secrets (force-deleted) |
 | 11 | Wizard staging bucket | `coder-wizard-templates-<account>-<region>` |
+
+> **Ordering matters:** the Bedrock IAM user and (with `--delete-data`) the
+> `DeletionPolicy: Retain` Aurora cluster are removed **before** the core stack.
+> The IAM user has an out-of-band service-specific credential CloudFormation
+> doesn't track, and the retained Aurora instance holds the DB subnet group +
+> security group — leaving either in place makes the stack delete fail. If a
+> resource still can't be deleted (e.g. missing IAM permissions), the core stack
+> delete retains it and continues, then reports it for manual cleanup.
 
 > Aurora and EFS use `DeletionPolicy: Retain` in CloudFormation, so they
 > survive stack deletion by default. Pass `--delete-data` to explicitly
