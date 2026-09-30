@@ -63,19 +63,20 @@ locals {
   #     microVM (already a sandbox) and lacks bubblewrap, which Codex's
   #     workspace-write OS sandbox requires; without this the shell/exec tool fails
   #     ("sandbox launcher lacks bwrap").
-  #   * features.tool_search_always_defer_mcp_tools = false: expose the AWS MCP
-  #     tools directly to the model instead of hiding them behind a tool-search
-  #     step (which the model otherwise does not invoke, reporting tools
-  #     "unavailable").
+  # Codex 0.159.2 removed preferred_auth_method and the
+  # tool_search_always_defer_mcp_tools feature flag. Keep this schema aligned
+  # with the explicitly pinned CLI version below.
   codex_base_config = <<-TOML
-    preferred_auth_method = "apikey"
     model_provider        = "openai-compat"
     model                 = "us.openai.gpt-5.6-sol"
     web_search            = "disabled"
     sandbox_mode          = "danger-full-access"
 
     [features]
-    tool_search_always_defer_mcp_tools = false
+    # Codex 0.159.2's standalone release binary cannot bootstrap its shared
+    # background daemon because it has no complete local package. Keep the
+    # interactive CLI in standalone mode.
+    daemon_auto_start = false
 
     [model_providers.openai-compat]
     name     = "Coder AI Gateway (Bedrock)"
@@ -88,13 +89,11 @@ locals {
   TOML
 
   # AWS MCP servers for Codex (native TOML [mcp_servers.*], appended to
-  # config.toml by the module). A citizen-builder toolkit of AWS Labs MCP servers
-  # matching the Claude Code / Kiro templates (awslabs iac/pricing/serverless/
-  # cloudwatch), run on demand via uvx from the pre-warmed on-image cache
-  # (/opt/uv-cache). Calls use the workspace IRSA role (Codex forwards the pod env
-  # to the stdio servers, so AWS_ROLE_ARN / web-identity token are inherited);
-  # AWS_REGION pins the operation region (local.aws_region, derived from the ECR
-  # image URI). KEEP VERSIONS IN SYNC with images/coder-workspace-base/Dockerfile.
+  # config.toml by the module). Codex 0.159.2 starts stdio MCP servers with
+  # only the explicit `env` map, so `env_vars` must forward the IRSA values
+  # required to obtain AWS credentials. These default values keep the region
+  # and pre-warmed uv cache consistent with the workspace image. KEEP VERSIONS
+  # IN SYNC with images/coder-workspace-base/Dockerfile.
   #
   # NOTE: the managed remote `aws-mcp` server (AWS's Agent Toolkit endpoint via
   # mcp-proxy-for-aws, which provided call_aws for arbitrary AWS APIs plus general
@@ -108,21 +107,25 @@ locals {
     command = "uvx"
     args = ["awslabs.aws-iac-mcp-server==1.0.25"]
     env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
 
     [mcp_servers.awslabs-aws-pricing-mcp-server]
     command = "uvx"
     args = ["awslabs.aws-pricing-mcp-server==1.1.0"]
     env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
 
     [mcp_servers.awslabs-aws-serverless-mcp-server]
     command = "uvx"
     args = ["awslabs.aws-serverless-mcp-server==0.2.0"]
     env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
 
     [mcp_servers.awslabs-cloudwatch-mcp-server]
     command = "uvx"
     args = ["awslabs.cloudwatch-mcp-server==0.2.0"]
     env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
   TOML
 }
 
@@ -330,13 +333,77 @@ module "code-server" {
 }
 
 module "codex" {
-  source           = "registry.coder.com/coder-labs/codex/coder"
-  version          = "5.3.2"
-  agent_id         = coder_agent.dev.id
-  workdir          = local.home_dir
-  install_codex    = true
+  source        = "registry.coder.com/coder-labs/codex/coder"
+  version       = "5.3.2"
+  agent_id      = coder_agent.dev.id
+  workdir       = local.home_dir
+  install_codex = true
+
+  # Keep the installed binary aligned with local.codex_base_config. This was
+  # verified with a gateway request and the native AWS MCP configuration.
+  codex_version    = "0.159.2"
   base_config_toml = local.codex_base_config
   mcp              = local.codex_mcp_toml
+}
+
+# Fail workspace provisioning if a future template edit or Codex module update
+# writes a configuration the pinned CLI does not recognize. With listen=off,
+# successful parsing reaches the expected "no transport configured" diagnostic.
+resource "coder_script" "validate_codex_config" {
+  agent_id           = coder_agent.dev.id
+  display_name       = "Validate Codex configuration"
+  icon               = "/icon/openai.svg"
+  run_on_start       = true
+  start_blocks_login = true
+
+  depends_on = [module.codex]
+
+  script = <<-EOT
+    #!/bin/sh
+    set -eu
+
+    output="$(mktemp)"
+    trap 'rm -f "$output"' EXIT
+
+    # Coder creates script resources before their asynchronous agent units run.
+    # Wait until the Codex module has installed the pinned binary and generated
+    # its managed configuration; the binary is briefly unavailable while mv(1)
+    # replaces it during installation.
+    attempts=0
+    until command -v codex >/dev/null 2>&1 \
+      && codex --version >/dev/null 2>&1 \
+      && grep -Eq '^model_provider[[:space:]]*=[[:space:]]*"openai-compat"$' "$HOME/.codex/config.toml" 2>/dev/null; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 90 ]; then
+        echo "Timed out waiting for the Codex module installation." >&2
+        exit 1
+      fi
+      sleep 1
+    done
+
+    attempts=0
+    while :; do
+      set +e
+      codex app-server --strict-config --listen off >"$output" 2>&1
+      status=$?
+      set -e
+
+      if [ "$status" -eq 1 ] && grep -qF 'no transport configured' "$output"; then
+        echo "Codex configuration is valid for $(codex --version)."
+        exit 0
+      fi
+
+      if grep -qF 'Text file busy' "$output" && [ "$attempts" -lt 30 ]; then
+        attempts=$((attempts + 1))
+        sleep 1
+        continue
+      fi
+
+      cat "$output" >&2
+      echo "Codex configuration validation failed." >&2
+      exit "$status"
+    done
+  EOT
 }
 
 # Gateway auth for Codex (and any OpenAI SDK): the workspace owner's Coder
@@ -364,7 +431,7 @@ resource "coder_app" "codex" {
   open_in      = "slim-window"
   command      = <<-EOT
     cd "$HOME"
-    codex
+    codex --no-daemon
   EOT
 }
 
