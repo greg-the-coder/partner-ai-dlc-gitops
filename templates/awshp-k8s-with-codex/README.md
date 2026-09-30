@@ -33,10 +33,10 @@ Gateway.
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) as the Claude Code template is
   configured for Codex (native `[mcp_servers.*]` TOML) and run on demand via `uvx`:
   **IaC** (CloudFormation + CDK), **pricing**, **Serverless**, and **CloudWatch** —
-  covering the design → cost → build/deploy → operate lifecycle. Calls use the workspace
-  IAM role (IRSA); Codex forwards the pod environment to the stdio MCP servers, so the
-  `<cluster>-workshop-user` role/token are inherited automatically (no runtime credential
-  injection needed).
+  covering the design → cost → build/deploy → operate lifecycle. The configuration
+  explicitly forwards the workspace IAM role (IRSA) variables to each MCP process;
+  Codex 0.159.2 starts stdio MCP servers with only their configured environment, so
+  forwarding is required for the servers to obtain AWS credentials.
   > The managed remote `aws-mcp` server (arbitrary-API `call_aws` + general AWS docs) was
   > removed from all templates because its remote endpoint intermittently failed the MCP
   > handshake (`-32602`). General AWS API access is available via the **AWS CLI** (v2) and
@@ -54,23 +54,24 @@ Bedrock-backed gateway. Non-obvious settings and why they are required:
 - `sandbox_mode = "danger-full-access"` — the workspace is an isolated Fargate microVM
   (already a sandbox) and lacks `bubblewrap`, which Codex's `workspace-write` OS sandbox
   requires; without this the shell/exec tool fails ("sandbox launcher lacks bwrap").
-- `features.tool_search_always_defer_mcp_tools = false` — expose the AWS MCP tools
-  directly to the model instead of hiding them behind a tool-search step (which the model
-  otherwise does not invoke, reporting tools "unavailable").
+- **Pinned Codex CLI (`0.159.2`)** — the template pins and tests the CLI version because
+  Codex configuration fields can change between releases. Workspace startup validates the
+  generated `config.toml` with this pinned binary before login is allowed. The standalone
+  release does not contain the complete local package required by Codex's shared background
+  daemon, so the template disables daemon auto-start and launches Codex with `--no-daemon`.
 
 > The path segment (`openai-compat`) is the **AI Gateway provider name** from
 > `ai-providers/`, not the API type — the gateway routes `/api/v2/ai-gateway/<provider-name>/`.
 
 ### Known limitation — the `/model` command
-Codex's `/model` picker lists its built-in model lineup (e.g. gpt-6-astra, gpt-5.6-sol,
-gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.2). This deployment routes through the Coder
-AI Gateway, which **only** serves the configured model (`us.openai.gpt-5.6-sol`), so
-selecting any other entry makes the gateway reject the request and **breaks the session**.
-codex 0.153.4 exposes no supported setting to disable or restrict the picker, so as a
-stopgap the template writes a note into the workspace `AGENTS.md` telling the agent and
-the user not to use `/model` (changing the reasoning effort for the current model is
-fine). If you switch by mistake, restart Codex to return to the configured model. A hard
-lock is tracked for a future update.
+Codex's `/model` picker lists its built-in model lineup. This deployment routes through
+the Coder AI Gateway, which **only** serves the configured model
+(`us.openai.gpt-5.6-sol`), so selecting any other entry makes the gateway reject the
+request and **breaks the session**. Codex 0.159.2 exposes no supported setting to disable
+or restrict the picker, so as a stopgap the template writes a note into the workspace
+`AGENTS.md` telling the agent and the user not to use `/model` (changing the reasoning
+effort for the current model is fine). If you switch by mistake, restart Codex to return
+to the configured model. A hard lock is tracked for a future update.
 
 ### Notebooks & agent SDKs (Coder AI Gateway)
 The agent kernel (`Python (Agents)`) inherits `OPENAI_BASE_URL` and `OPENAI_API_KEY`, so
