@@ -307,21 +307,35 @@ resource "coder_agent" "dev" {
     # Claude Code v5 dropped the dangerously_skip_permissions input; set bypass
     # mode at user scope instead (equivalent to --dangerously-skip-permissions)
     # and skip the dangerous-mode TOS prompt. We also LOCK model selection to the
-    # gateway-configured default by setting availableModels to an empty array
-    # ("only the default model is available", which declines any /model swap):
-    # Claude Code's model picker otherwise offers the full Anthropic lineup, but
-    # this deployment routes through the Coder AI Gateway (Bedrock provider), which
-    # only serves the admin-configured models (default Opus 4.6 + Haiku 4.5), so
-    # switching to any other model id makes the gateway reject the request and
-    # breaks the session. User-scope settings.json is writable by the uid-1000 pod;
-    # managed-settings under /etc/claude-code would require root. This only writes
+    # gateway's admin-configured models by populating availableModels with the
+    # Claude Code canonical IDs for the models the Coder AI Gateway serves
+    # (default Opus 4.6 + Haiku 4.5). Claude Code's model picker otherwise offers
+    # the full Anthropic lineup, but this deployment routes through the Coder AI
+    # Gateway (Bedrock provider), which only serves the admin-configured models,
+    # so switching to any other model id makes the gateway reject the request and
+    # breaks the session.
+    #
+    # IMPORTANT: availableModels entries are matched EXACTLY against the raw
+    # ANTHROPIC_MODEL value, so when the env var contains a Bedrock inference
+    # profile ID (e.g. "us.anthropic.claude-opus-4-6-v1") that exact string must
+    # appear in the list — the canonical short name alone ("claude-opus-4-6") is
+    # not enough. We include BOTH forms so the allowlist works regardless of
+    # whether the module sets the env var to the Bedrock ID or the short name.
+    # An empty array does NOT mean "only the default" — Claude Code treats []
+    # as "nothing is allowed", rejects ANTHROPIC_MODEL, and falls back to its
+    # built-in default (currently claude-opus-5-5), which the gateway then
+    # silently remaps back to the Bedrock model — causing a misleading model
+    # identity in the session.
+    #
+    # User-scope settings.json is writable by the uid-1000 pod; managed-settings
+    # under /etc/claude-code would require root. This only writes
     # ~/.claude/settings.json (never calls coder), and targets a different file
     # than the module install script's ~/.claude.json, so it is safe to run
     # concurrently with the module.
     mkdir -p "$HOME/.claude"
     SETTINGS="$HOME/.claude/settings.json"
     [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "availableModels": [], "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
+    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "availableModels": ["claude-opus-4-6", "us.anthropic.claude-opus-4-6-v1", "claude-haiku-4-5", "us.anthropic.claude-haiku-4-5-20251001-v1"], "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
 
     EOT
 
