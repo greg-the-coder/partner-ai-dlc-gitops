@@ -75,7 +75,7 @@ provider "coderd" {
 resource "coderd_template" "awshp-k8s-with-claude-code" {
   name        = "awshp-k8s-base-claudecode"
   display_name = "AWS Workshop - Kubernetes with Claude Code"
-  description = "Fargate Claude Code workspace routed via the Coder AI Gateway, with AWS Labs MCP servers, AWS CLI/CDK, and Bedrock."
+  description  = "Fargate Claude Code workspace routed via the Coder AI Gateway, with the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, and Bedrock."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-claude-code"
@@ -100,7 +100,7 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
 resource "coderd_template" "awshp-k8s-with-kiro_cli" {
   name        = "awshp-k8s-base-kirocli"
   display_name = "AWS Workshop - Kubernetes with Kiro CLI"
-  description = "Fargate Kiro CLI workspace with AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Bedrock access."
+  description  = "Fargate Kiro CLI workspace with the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, Node.js, and Bedrock access."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-kiro-cli"
@@ -125,7 +125,7 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
 resource "coderd_template" "awshp-k8s-with-codex" {
   name        = "awshp-k8s-base-codex"
   display_name = "AWS Workshop - Kubernetes with OpenAI Codex"
-  description = "Fargate OpenAI Codex CLI workspace via the Coder AI Gateway (GPT-5.6 Sol on Bedrock), with AWS Labs MCP servers and AWS CLI/CDK"
+  description  = "Fargate OpenAI Codex CLI workspace via the Coder AI Gateway (GPT-5.6 Sol on Bedrock), with the Agent Toolkit for AWS MCP Server and AWS CLI/CDK"
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-codex"

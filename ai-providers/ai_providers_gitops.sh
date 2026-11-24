@@ -13,9 +13,10 @@
 #   BEDROCK_MODEL             - primary/default model id
 #   BEDROCK_SMALL_FAST_MODEL  - small/fast model id
 #   BEDROCK_OPENAI_KEY        - Amazon Bedrock API key (ABSK bearer)  (required)
-#   MCP_KNOWLEDGE_SLUG        - AWS Knowledge MCP server slug     (default aws-knowledge)
-#   MCP_KNOWLEDGE_URL         - AWS Knowledge MCP server endpoint (default knowledge-mcp.global.api.aws)
-#   MCP_KNOWLEDGE_AVAIL       - availability policy               (default default_on)
+#   MCP_AWS_SLUG              - AWS MCP server slug               (default aws-mcp)
+#   MCP_AWS_URL               - AWS MCP Server endpoint           (default https://aws-mcp.us-west-2.api.aws/mcp)
+#   MCP_AWS_AVAIL             - availability policy               (default default_on)
+#   MCP_AWS_AUTH_TYPE         - auth mode: oauth2 | none          (default oauth2)
 #
 set -euo pipefail
 
@@ -53,10 +54,13 @@ export TF_VAR_bedrock_model="${BEDROCK_MODEL:-global.anthropic.claude-opus-4-6-v
 export TF_VAR_bedrock_small_fast_model="${BEDROCK_SMALL_FAST_MODEL:-global.anthropic.claude-haiku-4-5-20251001-v1:0}"
 export TF_VAR_bedrock_openai_api_key="${BEDROCK_OPENAI_KEY:-}"
 
-# Coder Agents MCP server (AWS Knowledge) — overridable, with sensible defaults.
-export TF_VAR_mcp_knowledge_slug="${MCP_KNOWLEDGE_SLUG:-aws-knowledge}"
-export TF_VAR_mcp_knowledge_url="${MCP_KNOWLEDGE_URL:-https://knowledge-mcp.global.api.aws}"
-export TF_VAR_mcp_knowledge_availability="${MCP_KNOWLEDGE_AVAIL:-default_on}"
+# Coder Agents MCP server (AWS MCP Server / Agent Toolkit for AWS) — overridable,
+# with sensible defaults. Legacy MCP_KNOWLEDGE_* names are accepted as
+# deprecated aliases for one release to avoid breaking existing automation.
+export TF_VAR_mcp_aws_slug="${MCP_AWS_SLUG:-${MCP_KNOWLEDGE_SLUG:-aws-mcp}}"
+export TF_VAR_mcp_aws_url="${MCP_AWS_URL:-https://aws-mcp.us-west-2.api.aws/mcp}"
+export TF_VAR_mcp_aws_availability="${MCP_AWS_AVAIL:-${MCP_KNOWLEDGE_AVAIL:-default_on}}"
+export TF_VAR_mcp_aws_auth_type="${MCP_AWS_AUTH_TYPE:-oauth2}"
 
 terraform init -input=false
 

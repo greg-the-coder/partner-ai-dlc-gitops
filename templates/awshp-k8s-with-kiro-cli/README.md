@@ -1,6 +1,6 @@
 ---
 display_name: AWS Workshop - Kubernetes with Kiro CLI
-description: Fargate workspace with the Kiro CLI AI assistant, AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
+description: Fargate workspace with the Kiro CLI AI assistant, the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
@@ -19,10 +19,12 @@ A serverless Coder workspace running on **AWS Fargate** with the
 - **Kiro CLI** (`kiro-cli`) for interactive, command-line AI development
 - **Kiro IDE** web app
 - **MCP** (Model Context Protocol) support — pre-seeded `~/.kiro/settings/mcp.json`
-  with a citizen-builder set of [AWS Labs MCP servers](https://github.com/awslabs/mcp),
-  run on demand via `uvx`: AWS **documentation**, **IaC** (CloudFormation + CDK),
-  **pricing**, **API** (`call_aws`), **Serverless**, and **CloudWatch** — covering the
-  learn → design → cost → build/deploy → operate lifecycle. Calls use the workspace IAM role.
+  with the [Agent Toolkit for AWS](https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/)
+  **AWS MCP Server**, reached over stdio via `uvx mcp-proxy-for-aws` (SigV4).
+  One managed, remote endpoint provides AWS API access (`call_aws`), live AWS
+  documentation/API-reference search, runtime-discoverable skills, and a
+  sandboxed Python tool — superseding the former AWS Labs servers
+  (docs, IaC, pricing, Serverless, CloudWatch). Calls use the workspace IAM role (IRSA).
 - **Amazon Bedrock** access via the workspace IAM role
 
 ### Developer environment
