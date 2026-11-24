@@ -16,7 +16,7 @@ A serverless Coder workspace running on **AWS Fargate** with the
 ## Capabilities
 
 ### AI assistant
-- **Kiro CLI** (`kiro-cli`, `kiro-cli-chat`) for interactive, command-line AI development
+- **Kiro CLI** (`kiro-cli`) for interactive, command-line AI development
 - **Kiro IDE** web app
 - **MCP** (Model Context Protocol) support — pre-seeded `~/.kiro/settings/mcp.json`
   with a citizen-builder set of [AWS Labs MCP servers](https://github.com/awslabs/mcp),

@@ -12,9 +12,12 @@ RUN apt-get update && apt-get install -y libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Kiro CLI
+# The installer drops a single `kiro-cli` binary into /root/.local/bin. (It no
+# longer ships a separate `kiro-cli-chat` binary -- copying that file made the
+# build fail with "cp: cannot stat '/root/.local/bin/kiro-cli-chat'".) Copy only
+# what the installer actually produces.
 RUN curl -fsSL https://cli.kiro.dev/install | bash \
     && cp /root/.local/bin/kiro-cli /usr/local/bin/kiro-cli \
-    && cp /root/.local/bin/kiro-cli-chat /usr/local/bin/kiro-cli-chat \
-    && chmod +x /usr/local/bin/kiro-cli /usr/local/bin/kiro-cli-chat
+    && chmod +x /usr/local/bin/kiro-cli
 
 USER coder

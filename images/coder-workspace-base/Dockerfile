@@ -15,7 +15,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN useradd -m -s /bin/bash -u 1000 coder
 
 # System packages (common to all workspace images)
-RUN apt-get update && apt-get install -y \
+# Run `apt-get upgrade` first so the image picks up the latest Ubuntu security
+# (CVE) patches for packages already present in the base layer, not just the
+# versions frozen when the ubuntu:22.04 tag was published.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y \
     curl \
     unzip \
     gnupg \
@@ -27,6 +32,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     bash \
     openssh-client \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 20 LTS
@@ -47,7 +53,11 @@ RUN npm install -g aws-cdk
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 # Playwright headless browser for web scraping (used by agents to access workshop content)
-RUN pip3 install playwright \
+# Upgrade pip/setuptools/wheel first -- the versions bundled with the distro's
+# python3-pip have known CVEs (e.g. setuptools CVE-2024-6345, CVE-2025-47273),
+# so pull the latest patched packaging tools before installing anything.
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip3 install --no-cache-dir playwright \
     && playwright install chromium --with-deps
 
 # --- Pre-baked Python 3.12 virtualenv + Jupyter kernel for agent notebooks ---
@@ -61,6 +71,8 @@ RUN pip3 install playwright \
 # pulled in. --no-cache keeps the uv download cache out of the image layer.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python 3.12 --seed /opt/venvs/agents \
+    && UV_LINK_MODE=copy uv pip install --no-cache --upgrade --python /opt/venvs/agents/bin/python \
+        pip setuptools wheel \
     && UV_LINK_MODE=copy uv pip install --no-cache --python /opt/venvs/agents/bin/python \
         torch --index-url https://download.pytorch.org/whl/cpu \
     && UV_LINK_MODE=copy uv pip install --no-cache --python /opt/venvs/agents/bin/python \
