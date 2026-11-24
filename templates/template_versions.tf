@@ -25,7 +25,7 @@ variable "coder_token" {
 variable "coder_gitsha" {
   type        = string
   description = "Git SHA to use in version name"
-  default = ""  
+  default     = ""
 }
 variable "workspace_image" {
   type        = string
@@ -64,8 +64,8 @@ variable "efs_file_system_id" {
 }
 
 provider "coderd" {
-    url   = "${var.coder_url}"
-    token = "${var.coder_token}"
+  url   = var.coder_url
+  token = var.coder_token
 }
 
 ###########################################################
@@ -73,10 +73,10 @@ provider "coderd" {
 ###########################################################
 
 resource "coderd_template" "awshp-k8s-with-claude-code" {
-  name        = "awshp-k8s-base-claudecode"
+  name         = "awshp-k8s-base-claudecode"
   display_name = "AWS Workshop - Kubernetes with Claude Code"
-  description  = "Fargate Claude Code workspace routed via the Coder AI Gateway, with the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, and Bedrock."
-  icon = "/icon/k8s.png"
+  description  = "Fargate Claude Code workspace via the Coder AI Gateway, with the Agent Toolkit AWS MCP Server, AWS CLI/CDK, and Bedrock."
+  icon         = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-claude-code"
     active    = true
@@ -85,23 +85,23 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
     tf_vars = [{
       name  = "namespace"
       value = "coder-ws"
-    },
-    {
-      name  = "workspace_image"
-      value = var.claude_code_image
-    },
-    {
-      name  = "efs_file_system_id"
-      value = var.efs_file_system_id
+      },
+      {
+        name  = "workspace_image"
+        value = var.claude_code_image
+      },
+      {
+        name  = "efs_file_system_id"
+        value = var.efs_file_system_id
     }]
   }]
 }
 
 resource "coderd_template" "awshp-k8s-with-kiro_cli" {
-  name        = "awshp-k8s-base-kirocli"
+  name         = "awshp-k8s-base-kirocli"
   display_name = "AWS Workshop - Kubernetes with Kiro CLI"
   description  = "Fargate Kiro CLI workspace with the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, Node.js, and Bedrock access."
-  icon = "/icon/k8s.png"
+  icon         = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-kiro-cli"
     active    = true
@@ -110,23 +110,23 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     tf_vars = [{
       name  = "namespace"
       value = "coder-ws"
-    },
-    {
-      name  = "workspace_image"
-      value = var.kiro_cli_image
-    },
-    {
-      name  = "efs_file_system_id"
-      value = var.efs_file_system_id
+      },
+      {
+        name  = "workspace_image"
+        value = var.kiro_cli_image
+      },
+      {
+        name  = "efs_file_system_id"
+        value = var.efs_file_system_id
     }]
   }]
 }
 
 resource "coderd_template" "awshp-k8s-with-codex" {
-  name        = "awshp-k8s-base-codex"
+  name         = "awshp-k8s-base-codex"
   display_name = "AWS Workshop - Kubernetes with OpenAI Codex"
-  description  = "Fargate OpenAI Codex CLI workspace via the Coder AI Gateway (GPT-5.6 Sol on Bedrock), with the Agent Toolkit for AWS MCP Server and AWS CLI/CDK"
-  icon = "/icon/k8s.png"
+  description  = "Fargate OpenAI Codex CLI via Coder AI Gateway (GPT-5.6 Sol on Bedrock), Agent Toolkit AWS MCP Server, AWS CLI/CDK."
+  icon         = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-codex"
     active    = true
@@ -135,14 +135,14 @@ resource "coderd_template" "awshp-k8s-with-codex" {
     tf_vars = [{
       name  = "namespace"
       value = "coder-ws"
-    },
-    {
-      name  = "workspace_image"
-      value = var.codex_image
-    },
-    {
-      name  = "efs_file_system_id"
-      value = var.efs_file_system_id
+      },
+      {
+        name  = "workspace_image"
+        value = var.codex_image
+      },
+      {
+        name  = "efs_file_system_id"
+        value = var.efs_file_system_id
     }]
   }]
 }
@@ -152,25 +152,25 @@ resource "coderd_template" "awshp-k8s-with-codex" {
 ###########################################################
 
 resource "coderd_template" "challenge-agent" {
-  name        = "awshp-k8s-challenge-agent"
+  name         = "awshp-k8s-challenge-agent"
   display_name = "AWS Workshop - AI Agent Development"
-  description = "Build and deploy AI agents to AWS on Fargate: Strands, LangGraph, LangChain, LlamaIndex, Lyzr + Bedrock and AWS CDK/CLI."
-  icon = "/icon/k8s.png"
+  description  = "Build and deploy AI agents to AWS on Fargate: Strands, LangGraph, LangChain, LlamaIndex, Lyzr + Bedrock and AWS CDK/CLI."
+  icon         = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-challenge-agent"
     active    = true
-    name = var.coder_gitsha
+    name      = var.coder_gitsha
     tf_vars = [{
       name  = "namespace"
       value = "coder-ws"
-    },
-    {
-      name  = "workspace_image"
-      value = var.challenge_image
-    },
-    {
-      name  = "efs_file_system_id"
-      value = var.efs_file_system_id
+      },
+      {
+        name  = "workspace_image"
+        value = var.challenge_image
+      },
+      {
+        name  = "efs_file_system_id"
+        value = var.efs_file_system_id
     }]
   }]
 }
