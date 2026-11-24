@@ -40,7 +40,7 @@ variable "efs_file_system_id" {
 variable "anthropic_model" {
   type        = string
   description = "Model id Claude Code requests through the Coder AI Gateway. Must match a model registered on the gateway's Bedrock provider (see ai-providers/); defaults to the Claude Opus 4.6 Bedrock inference profile."
-  default     = "global.anthropic.claude-opus-4-6-v1"
+  default     = "us.anthropic.claude-opus-4-6-v1"
 }
 
 locals {
