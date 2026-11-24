@@ -16,7 +16,14 @@ CloudFormation stack. Two capabilities are the focus of this platform:
 - **EC2 Spot workspaces** — a second, standardized compute lane on an EKS Auto Mode **Spot
   NodePool** (auto-scaled, scales to zero when idle) for cost-optimized, larger, GPU, or
   privileged workloads. Home directories stay on Amazon EFS, so storage is identical across
-  both lanes; the lane is chosen per workspace via the **Compute Lane** template parameter.
+  all lanes; the lane is chosen per workspace via the **Compute Lane** template parameter.
+- **AWS Nitro Sandbox workspaces** — a third compute lane that runs each workspace Pod in
+  its own **AWS Nitro Sandbox**: a hardware-isolated microVM with its own kernel, backed by
+  the AWS Nitro System. It gives the strongest per-workspace isolation — a container escape
+  or kernel exploit stays inside the Pod's own VM, not the node or neighboring Pods — with no
+  application changes (same images, EFS home, and AWS identity). Runs on a dedicated on-demand
+  EKS Auto Mode NodePool and requires Kubernetes 1.36+. Ideal for running untrusted or
+  agent-generated code.
 - **Coder Agents** — the built-in agentic coding assistant, wired to Amazon Bedrock (native)
   and its OpenAI-compatible endpoint (`bedrock-runtime/openai/v1`) so agents run entirely on
   AWS-hosted models.
@@ -115,24 +122,53 @@ suggest — inside guardrails the enterprise controls.
 Workspace templates create an EFS access point + PV/PVC per workspace and mount it at
 `/home/coder`. Tools installed outside the home directory live in the container image.
 
-## Workspace compute lanes (Fargate + EC2 Spot)
+## Workspace compute lanes (Fargate, EC2 Spot, AWS Nitro Sandbox)
 
-Every template exposes a **Compute Lane** parameter so a workspace can run on either lane
+Every template exposes a **Compute Lane** parameter so a workspace can run on any lane
 while keeping an identical **EFS-backed `/home/coder`**:
 
 | Lane | Where it runs | Selected by | Best for |
 |------|---------------|-------------|----------|
 | `fargate` (default) | EKS **Fargate profile** `coder-workspaces` | pod label `compute=fargate` matched by the profile selector `namespace=coder-ws,labels={compute=fargate}` | Strong per-workspace Firecracker isolation; serverless, nothing to scale |
 | `spot` | EKS Auto Mode **Spot NodePool** `coder-ws-spot` | pod `nodeSelector` `coder.workspace/lane=spot` + toleration for the matching `NoSchedule` taint | Cost-optimized (Spot), larger pods, GPU, privileged/Docker workloads |
+| `nitro` | EKS Auto Mode **Nitro NodePool** `coder-ws-nitro` (on-demand) running the `isolated-sandbox` RuntimeClass | pod `nodeSelector` `coder.workspace/lane=nitro` + toleration + `runtimeClassName: isolated-sandbox` | Strongest isolation: each Pod in its own hardware-isolated AWS Nitro Sandbox (its own kernel). Untrusted or agent-generated code |
 
-The Spot lane is a Karpenter `NodePool` (`infrastructure/k8s/spot-nodepool.yaml`) that plugs
-into **EKS Auto Mode**: it references Auto Mode's built-in `default` NodeClass (inheriting
+The Spot and Nitro lanes are Karpenter `NodePool`s
+(`infrastructure/k8s/spot-nodepool.yaml`, `infrastructure/k8s/nitro-nodepool.yaml`) that plug
+into **EKS Auto Mode**: each references Auto Mode's built-in `default` NodeClass (inheriting
 the node IAM role, subnets, and security groups) and auto-scales on demand, consolidating
-and scaling to zero when idle. Because the lane carries a taint, only opted-in workspaces
+and scaling to zero when idle. Because each lane carries a taint, only opted-in workspaces
 land there; everything else (including Fargate-lane pods) is unaffected.
 
-**Storage is the single standard:** both lanes use the same per-workspace EFS access point +
-static PV/PVC (`efs-static`, `ReadWriteMany`) mounted at `/home/coder`.
+**Storage is the single standard:** all three lanes use the same per-workspace EFS access
+point + static PV/PVC (`efs-static`, `ReadWriteMany`) mounted at `/home/coder` — including
+the Nitro lane, where the EFS CSI driver performs the NFS mount inside the sandbox.
+
+### AWS Nitro Sandbox lane — key benefits
+
+Selecting the **`nitro`** lane sets `runtimeClassName: isolated-sandbox` on the workspace
+Pod. On EKS Auto Mode (Kubernetes 1.36+) the Pod then runs inside its own **AWS Nitro
+Sandbox** — a lightweight, hardware-isolated microVM on the AWS Nitro System. Why use it:
+
+- **Hardware-enforced kernel isolation.** Each Pod gets its own Linux kernel; the Nitro
+  hypervisor enforces CPU and memory isolation from the node and from other Pods. A
+  container escape or kernel vulnerability is contained inside the Pod's VM — the strongest
+  boundary of the three lanes and a tier above Fargate's per-Pod isolation.
+- **Built for untrusted / agent-generated code.** The AI-DLC workflow runs model-written
+  code; the sandbox limits the blast radius of anything that code does to the node or
+  cluster.
+- **No application changes.** Same workspace images, the same EFS `/home/coder`, and the same
+  EKS Pod Identity / IRSA AWS identity all keep working — isolation is a one-line RuntimeClass
+  opt-in, not a re-architecture.
+- **Managed by EKS Auto Mode.** Auto Mode provisions Nitro-Enclaves-capable nodes on demand
+  and scales them to zero when idle; there is no AMI to build or node group to operate.
+- **Reuses the deployment's existing ingress/egress.** This lane adds *kernel* isolation
+  only; network reachability is governed by the cluster's existing controls (it does not add
+  the egress proxy / default-deny NetworkPolicy of the upstream reference template).
+
+Trade-offs: on-demand EC2 nodes (no Spot interruption for isolated workloads), CPU/memory
+are fixed at the Pod's requests at boot, and a per-Pod scratch-disk limit applies (`/` and
+`/tmp` share it); the EFS home is separate. Requires the `aws-efs-csi-driver` add-on ≥ 3.5.0.
 
 ## Coder Agents
 
@@ -320,7 +356,7 @@ terraform apply -auto-approve
 
 ## Architecture Summary
 
-- **EKS** — Auto Mode (control plane + system workloads) with two workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods) and an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods)
+- **EKS** — Auto Mode (control plane + system workloads) with three workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods), an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods), and an on-demand **AWS Nitro Sandbox NodePool** `coder-ws-nitro` (`compute=nitro` pods, `isolated-sandbox` RuntimeClass for per-Pod hardware isolation)
 - **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). Uses
   `DeletionPolicy: Retain` so a stack rollback/delete never destroys the database
   (re-attach or clean up the retained cluster when reusing the same `EKSClusterName`).
