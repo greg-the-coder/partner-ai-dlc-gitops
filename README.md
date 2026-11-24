@@ -1,7 +1,8 @@
 # AWS Coder AI-DLC GitOps
 
 AI-powered development platform on AWS: [Coder](https://coder.com) on Amazon EKS, with
-**serverless Fargate workspaces** and **Coder Agents** backed by Amazon Bedrock.
+workspaces across three compute lanes — **serverless Fargate**, **EC2 Spot**, and
+**AWS Nitro Sandbox** (hardware-isolated) — and **Coder Agents** backed by Amazon Bedrock.
 
 ![Architecture Diagram](docs/images/AWSCoderSingleRegionv3-0.png)
 
