@@ -116,7 +116,7 @@ variable "mcp_aws_slug" {
 
 variable "mcp_aws_url" {
   type        = string
-  description = "Endpoint for the AWS MCP Server (remote, streamable HTTP). Regional; co-locate with the deployment. Append ?oauth=initialize if the client does not auto-trigger OAuth discovery."
+  description = "Endpoint for the AWS MCP Server (remote, streamable HTTP). Regional; co-locate with the deployment. For the org-level anonymous (docs/skills) connection, keep auth_type=none; alternatively set this to the AWS Knowledge MCP endpoint (https://knowledge-mcp.global.api.aws)."
   default     = "https://aws-mcp.us-west-2.api.aws/mcp"
 }
 
@@ -128,8 +128,8 @@ variable "mcp_aws_availability" {
 
 variable "mcp_aws_auth_type" {
   type        = string
-  description = "Auth mode for the AWS MCP server. 'oauth2' = per-user AWS Sign-in OAuth 2.1 (auto-discovery). 'none' = anonymous (docs/skills subset only)."
-  default     = "oauth2"
+  description = "Auth mode for the AWS MCP server. Use 'none' (anonymous docs/skills subset). 'oauth2' auto-discovery is NOT supported for a server-side Coder MCP server: AWS Sign-in DCR only accepts allow-listed redirect URIs (localhost + specific SaaS vendors), and Coder's callback URL is rejected (invalid_redirect_uri)."
+  default     = "none"
 }
 
 # --------------------------------------------------------------------------
@@ -442,39 +442,43 @@ resource "coderd_agents_default_model" "default" {
 # AWS-hosted MCP server exposing live AWS docs/API refs, runtime-discoverable
 # agent skills, AWS API access (call_aws), and a sandboxed Python tool.
 #
-# Auth = OAuth 2.1 via AWS Sign-in. Coder's `oauth2` auth mode with the
-# oauth2_* fields left empty performs OAuth auto-discovery (RFC 9728 Protected
-# Resource Metadata -> RFC 8414 Authorization Server Metadata -> RFC 7591
-# Dynamic Client Registration). Each developer authorizes once via the connect
-# popup with their own AWS identity; Coder stores and refreshes the per-user
-# token. The IAM principal they sign in with must carry
-# arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy (see
-# infrastructure/coder_deployment.yaml).
+# Auth = NONE (anonymous). The org-level Coder Agents chat connects without
+# credentials and uses the AWS MCP Server's unauthenticated subset — AWS
+# documentation search and agent skills. Full AWS API access (call_aws, the
+# sandboxed script tool) requires AWS credentials and is delivered instead in
+# the per-workspace IDE/CLI lanes, where mcp-proxy-for-aws signs requests with
+# the pod's IRSA identity (SigV4).
 #
-# tool_deny_list enforces a read-only posture for the shared demo: the agent can
-# propose but not execute the sandboxed-script / destructive paths from the
-# org-level chat. Remove or narrow it to grant write access.
+# Why not OAuth here: the AWS MCP Server's OAuth 2.1 flow (AWS Sign-in) relies
+# on Dynamic Client Registration, and AWS Sign-in only accepts an ALLOW-LISTED
+# set of redirect URIs — localhost/127.0.0.1 and specific SaaS vendors (Claude,
+# Cursor, VS Code, ChatGPT, Devin, ...). A server-side Coder MCP server
+# registers its own CloudFront callback URL, which is not on that list, so
+# AWS Sign-in rejects registration with 400 invalid_redirect_uri and the
+# Terraform apply fails. auth_type=oauth2 is therefore not usable for this
+# resource today. See
+# https://docs.aws.amazon.com/signin/latest/userguide/aws-mcp-server.html
+# ("Supported Redirect URIs for DCR").
 #
-# Requires Coder v2.37.0+ with the AI Governance Add-On; validate OAuth2 MCP
-# behavior on the deployed server version (see the plan's caveats).
+# If the anonymous MCP handshake proves unreliable against aws-mcp.*.api.aws at
+# runtime, set var.mcp_aws_url to the AWS Knowledge MCP endpoint
+# (https://knowledge-mcp.global.api.aws), which is purpose-built for anonymous
+# docs access.
+#
+# Requires Coder v2.37.0+ with the AI Governance Add-On.
 # https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/
 resource "coderd_agents_mcp_server" "aws_mcp" {
   organization_id = data.coderd_organization.default.id
   display_name    = "AWS MCP (Agent Toolkit)"
   slug            = var.mcp_aws_slug
   url             = var.mcp_aws_url
-  description     = "AWS MCP Server (Agent Toolkit for AWS): live docs/API refs, skills, AWS API access, and sandboxed scripts."
+  description     = "AWS MCP Server (Agent Toolkit for AWS): AWS documentation search and agent skills (anonymous). Full AWS API access is provided in the workspace lanes via SigV4."
   icon_url        = "/icon/aws.png"
   transport       = "streamable_http"
   auth_type       = var.mcp_aws_auth_type
   availability    = var.mcp_aws_availability
   enabled         = true
   model_intent    = true
-
-  # Read-only posture for the org-level shared assistant (defense-in-depth
-  # alongside IAM). The sandboxed script executor can run arbitrary code, so it
-  # is denied here; knowledge + read APIs remain available.
-  tool_deny_list = ["aws___run_script"]
 }
 
 # Preserve resource identity across the aws_knowledge -> aws_mcp rename so the

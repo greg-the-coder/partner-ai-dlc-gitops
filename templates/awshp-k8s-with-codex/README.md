@@ -41,8 +41,10 @@ Gateway.
   Codex 0.159.2 starts stdio MCP servers with only their configured environment, so
   forwarding is required for the proxy to obtain AWS credentials.
   > SigV4 (local proxy) is used in the workspace because it is headless; the
-  > org-level Coder Agents chat uses the same AWS MCP Server with per-user
-  > OAuth. An earlier remote `aws-mcp` attempt was removed after `-32602`
+  > org-level Coder Agents chat connects to the same AWS MCP Server anonymously
+  > for docs + skills (OAuth is not usable for a server-side MCP registration —
+  > AWS Sign-in DCR rejects its callback URL). An earlier remote `aws-mcp`
+  > attempt was removed after `-32602`
   > handshake failures (Codex, an rmcp client, was hit hardest) and is
   > re-introduced here pinned to a known-good proxy version.
 

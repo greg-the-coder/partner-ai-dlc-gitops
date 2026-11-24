@@ -242,13 +242,15 @@ the pod's IRSA credentials. This replaces the former per-assistant set of
 [AWS Labs MCP servers](https://github.com/awslabs/mcp) (IaC, pricing,
 Serverless, CloudWatch), which AWS now supersedes with the Agent Toolkit.
 
-> The org-level **Coder Agents** assistant uses the same AWS MCP Server via the
-> Coder AI Governance MCP registration (`ai-providers/ai_providers.tf`), with
-> per-user **OAuth 2.1 (AWS Sign-in)** authentication (auto-discovery). An
-> earlier remote `aws-mcp` attempt was removed after `-32602` handshake
-> failures; it is re-introduced here pinned to a known-good proxy version
-> against the co-located regional endpoint, and validated per client before
-> rollout. See `agent-toolkit/README.md`.
+> The org-level **Coder Agents** assistant connects to the AWS MCP Server via the
+> Coder AI Governance MCP registration (`ai-providers/ai_providers.tf`) using
+> **anonymous** auth (`auth_type = none`) — AWS documentation search and agent
+> skills. Per-user OAuth 2.1 (AWS Sign-in) is **not** usable for a server-side
+> Coder MCP server: AWS Sign-in's Dynamic Client Registration only accepts
+> allow-listed redirect URIs (localhost + specific SaaS vendors), so Coder's
+> callback is rejected. Full AWS **API** access lives in the workspace lanes,
+> where `mcp-proxy-for-aws` signs requests with the pod's IRSA identity (SigV4).
+> See `agent-toolkit/README.md`.
 
 ## Prerequisites
 
@@ -369,7 +371,10 @@ terraform apply -auto-approve
 ## Architecture Summary
 
 - **EKS** — Auto Mode (control plane + system workloads) with three workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods), an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods), and an on-demand **AWS Nitro Sandbox NodePool** `coder-ws-nitro` (`compute=nitro` pods, `isolated-sandbox` RuntimeClass for per-Pod hardware isolation)
-- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). Uses
+- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). The master
+  password is **managed by RDS in AWS Secrets Manager** (`ManageMasterUserPassword`,
+  KMS-encrypted, rotatable) — no plaintext DB password in the template; the deploy build
+  reads the managed secret via its IAM role to assemble `CODER_PG_CONNECTION_URL`. Uses
   `DeletionPolicy: Retain` so a stack rollback/delete never destroys the database
   (re-attach or clean up the retained cluster when reusing the same `EKSClusterName`).
 - **CloudFront + Network Load Balancer** — secure global access to Coder

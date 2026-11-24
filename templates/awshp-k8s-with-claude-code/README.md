@@ -38,8 +38,10 @@ persisted on **Amazon EFS** so work survives workspace restarts.
   sandboxed Python tool — superseding the former AWS Labs servers (IaC,
   pricing, Serverless, CloudWatch). Calls use the workspace IAM role (IRSA).
   > SigV4 (local proxy) is used in the workspace because it is headless and
-  > already carries IRSA credentials; the org-level Coder Agents chat uses the
-  > same AWS MCP Server with per-user OAuth. An earlier remote `aws-mcp`
+  > already carries IRSA credentials; the org-level Coder Agents chat connects to
+  > the same AWS MCP Server anonymously for docs + skills (OAuth is not usable
+  > for a server-side MCP registration — AWS Sign-in DCR rejects its callback
+  > URL). An earlier remote `aws-mcp`
   > attempt was removed after `-32602` handshake failures and is re-introduced
   > here pinned to a known-good proxy version against the regional endpoint.
 
