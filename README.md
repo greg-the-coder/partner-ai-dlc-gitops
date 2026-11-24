@@ -371,7 +371,10 @@ terraform apply -auto-approve
 ## Architecture Summary
 
 - **EKS** — Auto Mode (control plane + system workloads) with three workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods), an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods), and an on-demand **AWS Nitro Sandbox NodePool** `coder-ws-nitro` (`compute=nitro` pods, `isolated-sandbox` RuntimeClass for per-Pod hardware isolation)
-- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). Uses
+- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). The master
+  password is **managed by RDS in AWS Secrets Manager** (`ManageMasterUserPassword`,
+  KMS-encrypted, rotatable) — no plaintext DB password in the template; the deploy build
+  reads the managed secret via its IAM role to assemble `CODER_PG_CONNECTION_URL`. Uses
   `DeletionPolicy: Retain` so a stack rollback/delete never destroys the database
   (re-attach or clean up the retained cluster when reusing the same `EKSClusterName`).
 - **CloudFront + Network Load Balancer** — secure global access to Coder

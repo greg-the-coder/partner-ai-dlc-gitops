@@ -26,13 +26,6 @@ Parameters:
     Description: Master username for the database
     Default: coder
   
-  Password:
-    Type: String
-    Description: Master password for the database
-    NoEcho: true
-    MinLength: 8
-    Default: coderworkshop
-  
   DatabaseName:
     Type: String
     Description: Initial database name
@@ -744,7 +737,11 @@ Resources:
       Engine: aurora-postgresql
       EngineVersion: '16.11'
       MasterUsername: !Ref Username
-      MasterUserPassword: !Ref Password
+      # RDS manages the master password in AWS Secrets Manager (KMS-encrypted)
+      # and can rotate it; no plaintext DB password lives in this template. The
+      # deploy build reads the managed secret via the CodeBuild/pod role
+      # (secretsmanager:GetSecretValue) to assemble CODER_PG_CONNECTION_URL.
+      ManageMasterUserPassword: true
       DatabaseName: !Ref DatabaseName
       Port: 5432
       DBSubnetGroupName: !Ref CoderAuroraSubnetGroup
@@ -817,14 +814,14 @@ Resources:
             Value: !Ref PrivateSubnet2
           - Name: Username
             Value: !Ref Username
-          - Name: Password
-            Value: !Ref Password
           - Name: DatabaseName
             Value: !Ref DatabaseName
           - Name: PostgreSQLClusterAddress
             Value: !GetAtt CoderAuroraCluster.Endpoint.Address
           - Name: PostgreSQLPort
             Value: !GetAtt CoderAuroraCluster.Endpoint.Port
+          - Name: DBSecretArn
+            Value: !GetAtt CoderAuroraCluster.MasterUserSecret.SecretArn
           - Name: CoderAdminEmail
             Value: !Ref CoderAdminEmail
           - Name: CoderAdminName
@@ -1017,7 +1014,10 @@ Resources:
                         --fargate-profile-name coder-workspaces
                       echo "Fargate profile is ACTIVE"
 
-                      PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
+                      DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DBSecretArn" --query SecretString --output text)
+                      DB_USER=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.username')
+                      DB_PASS_ENC=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.password | @uri')
+                      PostgreSQLConnectionURL="postgresql://${DB_USER}:${DB_PASS_ENC}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
                       kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
                  
                       helm install coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
@@ -1108,7 +1108,10 @@ Resources:
                       # re-run the Aurora cluster may have been recreated with a new endpoint; refresh
                       # the secret (idempotent) and restart coder so it reconnects. No-op on a fresh
                       # deploy where the value is already current.
-                      PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
+                      DB_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DBSecretArn" --query SecretString --output text)
+                      DB_USER=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.username')
+                      DB_PASS_ENC=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.password | @uri')
+                      PostgreSQLConnectionURL="postgresql://${DB_USER}:${DB_PASS_ENC}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
                       if kubectl -n coder get secret coder-db-url >/dev/null 2>&1; then
                         EXISTING_DB_URL=$(kubectl -n coder get secret coder-db-url -o jsonpath='{.data.url}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
                         if [ "$EXISTING_DB_URL" != "$PostgreSQLConnectionURL" ]; then
