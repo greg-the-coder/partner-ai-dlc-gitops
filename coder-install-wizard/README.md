@@ -205,7 +205,9 @@ partner-coder-wizard validate \
 > (`coder-ws-nitro` NodePool, `isolated-sandbox` RuntimeClass). The wizard's
 > **cost estimate** and **lane validation** currently model the Fargate + EC2
 > Spot split only; the Nitro lane is on-demand and is covered by the main
-> deployment and the template docs (see the repo README).
+> deployment and the template docs. See
+> [Choosing a lane](../README.md#choosing-a-lane) for each lane's benefits,
+> trade-offs, and when to use it.
 
 ### `status` / `watch` — Monitor Deployments
 
