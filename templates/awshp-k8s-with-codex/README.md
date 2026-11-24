@@ -99,7 +99,11 @@ llm = ChatOpenAI(model="us.openai.gpt-5.6-sol")   # or "us.xai.grok-4.6"
 - Python 3
 
 ## Runtime & infrastructure
-- **Compute:** AWS Fargate (namespace `coder-ws`), no EC2 worker nodes
+- **Compute lanes (`Compute Lane` parameter):**
+  - `fargate` (default) — serverless AWS Fargate, Firecracker microVM isolation; no nodes to manage.
+  - `spot` — EKS Auto Mode EC2 Spot NodePool (`coder-ws-spot`); auto-scaled, low cost.
+  - `nitro` — **AWS Nitro Sandbox** (`isolated-sandbox` RuntimeClass) on a dedicated on-demand NodePool (`coder-ws-nitro`): each workspace Pod runs in its own hardware-isolated microVM with its own kernel — the strongest per-workspace isolation, ideal for untrusted or agent-generated code. Requires EKS Auto Mode on Kubernetes 1.36+; egress uses the deployment's existing network controls.
+  - **Choosing a lane:** see the [compute-lane comparison](../../README.md#choosing-a-lane) for each lane's benefits, trade-offs, and when to use it.
 - **Storage:** Amazon EFS access point mounted at `/home/coder` (`ReadWriteMany`, persistent)
 - **Image:** reuses the Claude Code workspace image
   ([`images/coder-workspace-claude-code/Dockerfile`](../../images/coder-workspace-claude-code/Dockerfile)),
@@ -111,7 +115,7 @@ llm = ChatOpenAI(model="us.openai.gpt-5.6-sol")   # or "us.xai.grok-4.6"
 |-----------|---------|-------|
 | CPU cores | 2 | 2–8 |
 | Memory (GB) | 4 | 4–16 |
-| Compute Lane | fargate | fargate / spot |
+| Compute Lane | fargate | fargate / spot / nitro |
 
 Storage is provisioned automatically via EFS; there is no disk-size parameter.
 

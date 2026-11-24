@@ -43,7 +43,8 @@ partner-coder-wizard teardown --cluster coder-2-37-0-partnerdemo --region us-wes
 | Coder control plane | **v2.37.0**, HA (2 replicas) with a Premium license |
 | Compute lane 1 — **Fargate** | EKS Fargate profile `coder-workspaces`; Firecracker microVM isolation |
 | Compute lane 2 — **EC2 Spot** | EKS Auto Mode Spot NodePool `coder-ws-spot`; auto-scaled, scale-to-zero |
-| Storage | **Amazon EFS** per-workspace access point at `/home/coder` in both lanes |
+| Compute lane 3 — **AWS Nitro Sandbox** | EKS Auto Mode on-demand NodePool `coder-ws-nitro` with the `isolated-sandbox` RuntimeClass; per-Pod hardware-isolated microVM (own kernel). Requires Kubernetes 1.36+ |
+| Storage | **Amazon EFS** per-workspace access point at `/home/coder` in all lanes |
 | AI | Amazon Bedrock (native Anthropic) + OpenAI-compatible endpoint via Coder Agents |
 
 ---
@@ -199,6 +200,14 @@ partner-coder-wizard validate \
 | Spot Lane | `coder-ws-spot` NodePool present (requires kubectl) |
 | EFS CSI Driver | `aws-efs-csi-driver` addon is ACTIVE |
 | EFS File System | EFS is in `available` state |
+
+> The deployment also provisions the **AWS Nitro Sandbox** compute lane
+> (`coder-ws-nitro` NodePool, `isolated-sandbox` RuntimeClass). The wizard's
+> **cost estimate** and **lane validation** currently model the Fargate + EC2
+> Spot split only; the Nitro lane is on-demand and is covered by the main
+> deployment and the template docs. See
+> [Choosing a lane](../README.md#choosing-a-lane) for each lane's benefits,
+> trade-offs, and when to use it.
 
 ### `status` / `watch` — Monitor Deployments
 

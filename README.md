@@ -1,7 +1,8 @@
 # AWS Coder AI-DLC GitOps
 
 AI-powered development platform on AWS: [Coder](https://coder.com) on Amazon EKS, with
-**serverless Fargate workspaces** and **Coder Agents** backed by Amazon Bedrock.
+workspaces across three compute lanes — **serverless Fargate**, **EC2 Spot**, and
+**AWS Nitro Sandbox** (hardware-isolated) — and **Coder Agents** backed by Amazon Bedrock.
 
 ![Architecture Diagram](docs/images/AWSCoderSingleRegionv3-0.png)
 
@@ -16,7 +17,14 @@ CloudFormation stack. Two capabilities are the focus of this platform:
 - **EC2 Spot workspaces** — a second, standardized compute lane on an EKS Auto Mode **Spot
   NodePool** (auto-scaled, scales to zero when idle) for cost-optimized, larger, GPU, or
   privileged workloads. Home directories stay on Amazon EFS, so storage is identical across
-  both lanes; the lane is chosen per workspace via the **Compute Lane** template parameter.
+  all lanes; the lane is chosen per workspace via the **Compute Lane** template parameter.
+- **AWS Nitro Sandbox workspaces** — a third compute lane that runs each workspace Pod in
+  its own **AWS Nitro Sandbox**: a hardware-isolated microVM with its own kernel, backed by
+  the AWS Nitro System. It gives the strongest per-workspace isolation — a container escape
+  or kernel exploit stays inside the Pod's own VM, not the node or neighboring Pods — with no
+  application changes (same images, EFS home, and AWS identity). Runs on a dedicated on-demand
+  EKS Auto Mode NodePool and requires Kubernetes 1.36+. Ideal for running untrusted or
+  agent-generated code.
 - **Coder Agents** — the built-in agentic coding assistant, wired to Amazon Bedrock (native)
   and its OpenAI-compatible endpoint (`bedrock-runtime/openai/v1`) so agents run entirely on
   AWS-hosted models.
@@ -40,7 +48,14 @@ safely. That is what this repository provides:
   install dependencies, and execute generated code. Doing that on
   [Firecracker microVM](https://firecracker-microvm.github.io/)-isolated
   [Fargate workspaces](#fargate-workspaces) confines each agent run to a disposable,
-  single-tenant VM — the blast radius of an autonomous action is one sandbox.
+  single-tenant VM — the blast radius of an autonomous action is one sandbox. For the
+  highest-risk, untrusted, or fully-autonomous runs, the
+  [**AWS Nitro Sandbox** lane](#workspace-compute-lanes-fargate-ec2-spot-aws-nitro-sandbox)
+  tightens that boundary further: each Pod runs on the **AWS Nitro System** with a
+  hardware-enforced trust boundary, per-Pod policy enforcement from inside the guest, and an
+  optional confidential mode (encrypted memory + cryptographic attestation) — isolation that
+  holds even against a compromised node or cluster administrator, which Fargate's managed
+  data plane does not offer.
 - **Enterprise guardrails by construction.** Workspaces inherit scoped IAM roles, run inside
   your VPC, use models served through Amazon Bedrock, and are provisioned from version-
   controlled, reviewable templates. Access, networking, models, and tooling are all things
@@ -54,8 +69,12 @@ safely. That is what this repository provides:
 For **highly regulated industries** (financial services, healthcare, public sector), the
 primary barrier to agentic AI is not capability but **control, isolation, and
 auditability**. Running AI-DLC on this platform addresses those directly: VM-level isolation
-per workspace (Firecracker), no shared kernels, data and inference kept within AWS accounts
-and Regions you control, IAM/VPC boundaries around every agent, and human approval gates
+per workspace (Firecracker on Fargate) with no shared kernels — and, for workloads that
+demand the strongest boundary, an optional **AWS Nitro Sandbox** lane that adds a
+hardware-enforced trust boundary, per-Pod policy enforcement, and a confidential mode
+(encrypted memory + attestation) that protects the workload even from node and cluster
+administrators. Data and inference stay within AWS accounts
+and Regions you control, IAM/VPC boundaries wrap every agent, and human approval gates are
 built into the methodology. AWS's own [Responsible AI
 Policy](https://aws.amazon.com/ai/responsible-ai/policy/) — review agent output and costs —
 maps cleanly onto AI-DLC's human-in-the-loop phase gates.
@@ -115,24 +134,53 @@ suggest — inside guardrails the enterprise controls.
 Workspace templates create an EFS access point + PV/PVC per workspace and mount it at
 `/home/coder`. Tools installed outside the home directory live in the container image.
 
-## Workspace compute lanes (Fargate + EC2 Spot)
+### Stronger isolation when you need it: the AWS Nitro Sandbox lane
 
-Every template exposes a **Compute Lane** parameter so a workspace can run on either lane
-while keeping an identical **EFS-backed `/home/coder`**:
+Fargate's Firecracker isolation is the right default for most human and agent workspaces.
+For untrusted or fully-autonomous agent runs, or regulated workloads, the **`nitro`**
+[compute lane](#workspace-compute-lanes-fargate-ec2-spot-aws-nitro-sandbox) runs each Pod in
+its own **AWS Nitro Sandbox**, adding a hardware-enforced trust boundary, per-Pod policy, and
+an optional confidential (encrypted-memory) mode on top of per-Pod microVM isolation — same
+images, EFS home, and AWS identity, as a one-line RuntimeClass opt-in. See
+[Choosing a lane](#choosing-a-lane) for the full comparison.
 
-| Lane | Where it runs | Selected by | Best for |
-|------|---------------|-------------|----------|
-| `fargate` (default) | EKS **Fargate profile** `coder-workspaces` | pod label `compute=fargate` matched by the profile selector `namespace=coder-ws,labels={compute=fargate}` | Strong per-workspace Firecracker isolation; serverless, nothing to scale |
-| `spot` | EKS Auto Mode **Spot NodePool** `coder-ws-spot` | pod `nodeSelector` `coder.workspace/lane=spot` + toleration for the matching `NoSchedule` taint | Cost-optimized (Spot), larger pods, GPU, privileged/Docker workloads |
+## Workspace compute lanes (Fargate, EC2 Spot, AWS Nitro Sandbox)
 
-The Spot lane is a Karpenter `NodePool` (`infrastructure/k8s/spot-nodepool.yaml`) that plugs
-into **EKS Auto Mode**: it references Auto Mode's built-in `default` NodeClass (inheriting
-the node IAM role, subnets, and security groups) and auto-scales on demand, consolidating
-and scaling to zero when idle. Because the lane carries a taint, only opted-in workspaces
-land there; everything else (including Fargate-lane pods) is unaffected.
+Every template exposes a **Compute Lane** parameter. All lanes keep an identical,
+per-workspace **EFS-backed `/home/coder`** (`efs-static`, `ReadWriteMany`) — including Nitro,
+where the EFS CSI driver performs the NFS mount inside the sandbox — so only isolation, cost,
+and scheduling differ.
 
-**Storage is the single standard:** both lanes use the same per-workspace EFS access point +
-static PV/PVC (`efs-static`, `ReadWriteMany`) mounted at `/home/coder`.
+| Lane | Isolation | Ops & cost | Requirements | Best for |
+|------|-----------|------------|--------------|----------|
+| **`fargate`** (default) | Per-Pod Firecracker microVM (own kernel), AWS-managed data plane | Serverless, pay-per-Pod, nothing to scale | none extra | Most human + agent workspaces — the simplest strong default |
+| **`spot`** | Standard node runtime (shared kernel) on EC2 Spot | Auto-scaled, scales to zero, lowest cost; nodes can be reclaimed | EKS Auto Mode | Cost-sensitive, larger/GPU/privileged, interruption-tolerant work |
+| **`nitro`** | Per-Pod **AWS Nitro Sandbox** microVM **+ hardware trust boundary**, attestation, per-Pod Cedar policy, optional confidential (encrypted-memory) mode | On-demand EC2 (higher cost, no scale-to-zero); CPU/memory fixed at boot; +256 MiB overhead | EKS Auto Mode on **K8s 1.36+**, `aws-efs-csi-driver` ≥ 3.5.0 | Untrusted / fully-autonomous agent code; regulated workloads; need attestation, confidential mode, or your own node-level controls |
+
+**Scheduling:** `fargate` Pods carry the label `compute=fargate` and are matched by the EKS
+Fargate profile. `spot` and `nitro` Pods use `nodeSelector` + toleration
+`coder.workspace/lane=<lane>` to land on their Karpenter `NodePool`
+(`infrastructure/k8s/{spot,nitro}-nodepool.yaml`); the `nitro` Pod also sets
+`runtimeClassName: isolated-sandbox`. Both NodePools plug into **EKS Auto Mode** (built-in
+`default` NodeClass), auto-scale on demand, and are tainted so only opted-in workspaces land
+there.
+
+### Choosing a lane
+
+Fargate and Nitro both run each workspace in its **own microVM kernel**; the difference is the
+trust boundary and control model. Spot trades isolation strength for cost.
+
+- **Pick `fargate` (default)** for most human and agent workspaces — serverless simplicity
+  with strong per-Pod isolation and nothing to operate.
+- **Pick `nitro`** when you need a *hardware-enforced* boundary: untrusted or fully-autonomous
+  agent code, regulated workloads, or when you need **attestation**, **confidential mode**
+  (protects data even from node/cluster admins), or agent nodes behind **your own** network
+  controls. Trade-offs: on-demand EC2 cost, Kubernetes 1.36+, and size fixed at boot.
+- **Pick `spot`** for cost-optimized, larger, GPU, or privileged/Docker workloads where Spot
+  interruption is acceptable (standard node runtime; add other controls if isolation matters).
+
+The Nitro lane adds *kernel* isolation only — network reachability still uses the deployment's
+existing ingress/egress controls.
 
 ## Coder Agents
 
@@ -170,8 +218,19 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 | `awshp-k8s-base-codex` | AWS Workshop — Kubernetes with OpenAI Codex | OpenAI Codex CLI (GPT-5.6 Sol via the Coder AI Gateway) for interactive development. |
 | `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
 
-All templates support both compute lanes (Fargate default, EC2 Spot optional) via the
-**Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
+All templates support three compute lanes via the **Compute Lane** parameter,
+with EFS-backed persistent home directories in every lane:
+
+- **Fargate** (default) — serverless, Firecracker microVM isolation.
+- **EC2 Spot** — auto-scaled by EKS Auto Mode; lower cost; allows larger workloads.
+- **AWS Nitro Sandbox** — each workspace Pod runs in its own hardware-isolated
+  Nitro Sandbox (a microVM with its own kernel) via the `isolated-sandbox`
+  RuntimeClass on a dedicated on-demand NodePool (`coder-ws-nitro`). This lane
+  provides the strongest workload isolation and requires EKS **Auto Mode on
+  Kubernetes 1.36+** (the cluster defaults to 1.37) and the `aws-efs-csi-driver`
+  add-on **≥ 3.5.0** for the EFS home. Network egress uses the deployment's
+  existing controls — this lane adds kernel isolation only, not a network
+  boundary.
 
 The **Claude Code**, **Codex**, and **Kiro CLI** templates connect to the
 [Agent Toolkit for AWS](https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/)
@@ -309,7 +368,7 @@ terraform apply -auto-approve
 
 ## Architecture Summary
 
-- **EKS** — Auto Mode (control plane + system workloads) with two workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods) and an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods)
+- **EKS** — Auto Mode (control plane + system workloads) with three workspace compute lanes: a dedicated **Fargate profile** (`compute=fargate` pods), an auto-scaled **EC2 Spot NodePool** `coder-ws-spot` (`compute=spot` pods), and an on-demand **AWS Nitro Sandbox NodePool** `coder-ws-nitro` (`compute=nitro` pods, `isolated-sandbox` RuntimeClass for per-Pod hardware isolation)
 - **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS). Uses
   `DeletionPolicy: Retain` so a stack rollback/delete never destroys the database
   (re-attach or clean up the retained cluster when reusing the same `EKSClusterName`).
@@ -343,6 +402,7 @@ terraform apply -auto-approve
 
 - [AWS AI-DLC (AI-Driven Development Life Cycle)](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows)
 - [Firecracker microVM](https://firecracker-microvm.github.io/) (powers AWS Fargate isolation)
+- [AWS Nitro Sandboxes on Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/sandboxing.html) (hardware-isolated / confidential pods — the `nitro` lane)
 - [Coder Documentation](https://coder.com/docs)
 - [Amazon EKS Fargate](https://docs.aws.amazon.com/eks/latest/userguide/fargate.html)
 - [Amazon EFS CSI Driver](https://docs.aws.amazon.com/eks/latest/userguide/efs-csi.html)

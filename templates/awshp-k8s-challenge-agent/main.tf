@@ -81,7 +81,7 @@ data "coder_parameter" "memory" {
 data "coder_parameter" "compute_lane" {
   name         = "Compute Lane"
   display_name = "Compute Lane"
-  description  = "fargate = serverless, Firecracker microVM isolation. spot = EC2 Spot node group, auto-scaled by EKS Auto Mode (lower cost, allows larger/GPU/privileged workloads). Home directory is on EFS in either lane."
+  description  = "fargate = serverless, Firecracker microVM isolation. spot = EC2 Spot node group, auto-scaled by EKS Auto Mode (lower cost, allows larger/GPU/privileged workloads). nitro = AWS Nitro Sandbox, a hardware-isolated microVM with its own kernel (strongest isolation; on-demand EC2). Home directory is on EFS in all lanes; egress uses the deployment's existing network controls."
   type         = "string"
   default      = "fargate"
   mutable      = true
@@ -95,6 +95,11 @@ data "coder_parameter" "compute_lane" {
   option {
     name  = "EC2 Spot (auto-scaled, low cost)"
     value = "spot"
+    icon  = "/icon/aws.png"
+  }
+  option {
+    name  = "AWS Nitro Sandbox (hardware-isolated)"
+    value = "nitro"
     icon  = "/icon/aws.png"
   }
 }
@@ -395,19 +400,25 @@ resource "kubernetes_deployment" "dev" {
         }
         service_account_name = "coder-ws"
 
-        # Spot lane: pin to the auto-scaled EKS Auto Mode Spot NodePool and tolerate
-        # its taint. Fargate lane: leave empty so the Fargate profile schedules the
-        # compute=fargate pod serverlessly.
-        node_selector = data.coder_parameter.compute_lane.value == "spot" ? { "coder.workspace/lane" = "spot" } : {}
+        # EC2 lanes (spot, nitro): pin to the matching EKS Auto Mode NodePool and
+        # tolerate its taint. Fargate lane: leave empty so the Fargate profile
+        # schedules the compute=fargate pod serverlessly.
+        node_selector = contains(["spot", "nitro"], data.coder_parameter.compute_lane.value) ? { "coder.workspace/lane" = data.coder_parameter.compute_lane.value } : {}
         dynamic "toleration" {
-          for_each = data.coder_parameter.compute_lane.value == "spot" ? [1] : []
+          for_each = contains(["spot", "nitro"], data.coder_parameter.compute_lane.value) ? [1] : []
           content {
             key      = "coder.workspace/lane"
             operator = "Equal"
-            value    = "spot"
+            value    = data.coder_parameter.compute_lane.value
             effect   = "NoSchedule"
           }
         }
+
+        # Nitro lane: run the workspace Pod in its own AWS Nitro Sandbox
+        # (hardware-isolated microVM with its own kernel). Requires EKS Auto Mode
+        # on k8s 1.36+, which provisions a Nitro-Enclaves-capable node. Other
+        # lanes use the node's default runtime (null = unset).
+        runtime_class_name = data.coder_parameter.compute_lane.value == "nitro" ? "isolated-sandbox" : null
         container {
           name              = "dev"
           image             = var.workspace_image
@@ -421,15 +432,20 @@ resource "kubernetes_deployment" "dev" {
             name  = "CODER_AGENT_TOKEN"
             value = coder_agent.dev.token
           }
+          # requests == limits for cpu/memory: a Nitro Sandbox boots the microVM
+          # at the requested size. ephemeral-storage is added only for the nitro
+          # lane, where the sandbox gets a scratch disk sized to the limit (/ and
+          # /tmp share it); the EFS home volume is separate. Other lanes keep
+          # their existing unbounded ephemeral behaviour.
           resources {
-            requests = {
+            requests = merge({
               "cpu"    = "${data.coder_parameter.cpu.value}"
               "memory" = "${data.coder_parameter.memory.value}Gi"
-            }
-            limits = {
+            }, data.coder_parameter.compute_lane.value == "nitro" ? { "ephemeral-storage" = "2Gi" } : {})
+            limits = merge({
               "cpu"    = "${data.coder_parameter.cpu.value}"
               "memory" = "${data.coder_parameter.memory.value}Gi"
-            }
+            }, data.coder_parameter.compute_lane.value == "nitro" ? { "ephemeral-storage" = "8Gi" } : {})
           }
           volume_mount {
             mount_path = local.home_dir
