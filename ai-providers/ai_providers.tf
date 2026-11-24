@@ -99,24 +99,37 @@ variable "bedrock_openai_api_key_version" {
   default     = 1
 }
 
-# --- Coder Agents MCP servers (AWS Knowledge) --------------------------------
+# --- Coder Agents MCP server (AWS MCP Server / Agent Toolkit for AWS) ---------
+# Replaces the former AWS Knowledge MCP server. The Agent Toolkit's AWS MCP
+# Server is the AWS-designated successor to both the AWS Knowledge MCP server
+# and the AWS API MCP server: one managed, remote endpoint that exposes live
+# AWS documentation/API references, runtime-discoverable skills, AWS API access
+# (call_aws), and a sandboxed Python tool -- governed by IAM (incl. the
+# aws:ViaAWSMCPService / aws:CalledViaAWSMCP condition keys) and audited via
+# CloudTrail/CloudWatch.
 
-variable "mcp_knowledge_slug" {
+variable "mcp_aws_slug" {
   type        = string
-  description = "Organization-unique slug for the AWS Knowledge MCP server."
-  default     = "aws-knowledge"
+  description = "Organization-unique slug for the AWS MCP server."
+  default     = "aws-mcp"
 }
 
-variable "mcp_knowledge_url" {
+variable "mcp_aws_url" {
   type        = string
-  description = "Endpoint for the AWS Knowledge MCP server (remote, streamable HTTP)."
-  default     = "https://knowledge-mcp.global.api.aws"
+  description = "Endpoint for the AWS MCP Server (remote, streamable HTTP). Regional; co-locate with the deployment. Append ?oauth=initialize if the client does not auto-trigger OAuth discovery."
+  default     = "https://aws-mcp.us-west-2.api.aws/mcp"
 }
 
-variable "mcp_knowledge_availability" {
+variable "mcp_aws_availability" {
   type        = string
-  description = "Availability policy for the AWS Knowledge MCP server: force_on | default_on | default_off."
+  description = "Availability policy for the AWS MCP server: force_on | default_on | default_off."
   default     = "default_on"
+}
+
+variable "mcp_aws_auth_type" {
+  type        = string
+  description = "Auth mode for the AWS MCP server. 'oauth2' = per-user AWS Sign-in OAuth 2.1 (auto-discovery). 'none' = anonymous (docs/skills subset only)."
+  default     = "oauth2"
 }
 
 # --------------------------------------------------------------------------
@@ -425,24 +438,48 @@ resource "coderd_agents_default_model" "default" {
 # Coder Agents MCP servers
 # --------------------------------------------------------------------------
 
-# The AWS Knowledge MCP Server: a remote, fully-managed, AWS-hosted MCP server
-# (no install, no credentials) exposing AWS docs, API references, What's New,
-# Builder Center, and Well-Architected guidance -- ideal for Citizen
-# Developers/Builders. Replaces the former ai_mcp_servers_gitops.sh direct
-# admin-API call, now that coderd >= 0.0.25 provides a first-class resource
-# (coderd_agents_mcp_server). Requires Coder v2.37.0+ with the AI Governance
-# Add-On (the MCP-servers API).
-# https://github.com/awslabs/mcp/tree/main/src/aws-knowledge-mcp-server
-resource "coderd_agents_mcp_server" "aws_knowledge" {
+# The AWS MCP Server (Agent Toolkit for AWS): a remote, fully-managed,
+# AWS-hosted MCP server exposing live AWS docs/API refs, runtime-discoverable
+# agent skills, AWS API access (call_aws), and a sandboxed Python tool.
+#
+# Auth = OAuth 2.1 via AWS Sign-in. Coder's `oauth2` auth mode with the
+# oauth2_* fields left empty performs OAuth auto-discovery (RFC 9728 Protected
+# Resource Metadata -> RFC 8414 Authorization Server Metadata -> RFC 7591
+# Dynamic Client Registration). Each developer authorizes once via the connect
+# popup with their own AWS identity; Coder stores and refreshes the per-user
+# token. The IAM principal they sign in with must carry
+# arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy (see
+# infrastructure/coder_deployment.yaml).
+#
+# tool_deny_list enforces a read-only posture for the shared demo: the agent can
+# propose but not execute the sandboxed-script / destructive paths from the
+# org-level chat. Remove or narrow it to grant write access.
+#
+# Requires Coder v2.37.0+ with the AI Governance Add-On; validate OAuth2 MCP
+# behavior on the deployed server version (see the plan's caveats).
+# https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/
+resource "coderd_agents_mcp_server" "aws_mcp" {
   organization_id = data.coderd_organization.default.id
-  display_name    = "AWS Knowledge"
-  slug            = var.mcp_knowledge_slug
-  url             = var.mcp_knowledge_url
-  description     = "AWS-hosted MCP server: docs, API refs, What's New, Builder Center, and Well-Architected guidance."
+  display_name    = "AWS MCP (Agent Toolkit)"
+  slug            = var.mcp_aws_slug
+  url             = var.mcp_aws_url
+  description     = "AWS MCP Server (Agent Toolkit for AWS): live docs/API refs, skills, AWS API access, and sandboxed scripts."
   icon_url        = "/icon/aws.png"
   transport       = "streamable_http"
-  auth_type       = "none"
-  availability    = var.mcp_knowledge_availability
+  auth_type       = var.mcp_aws_auth_type
+  availability    = var.mcp_aws_availability
   enabled         = true
   model_intent    = true
+
+  # Read-only posture for the org-level shared assistant (defense-in-depth
+  # alongside IAM). The sandboxed script executor can run arbitrary code, so it
+  # is denied here; knowledge + read APIs remain available.
+  tool_deny_list = ["aws___run_script"]
+}
+
+# Preserve resource identity across the aws_knowledge -> aws_mcp rename so the
+# apply updates in place instead of destroy+recreate.
+moved {
+  from = coderd_agents_mcp_server.aws_knowledge
+  to   = coderd_agents_mcp_server.aws_mcp
 }

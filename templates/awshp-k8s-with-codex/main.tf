@@ -88,45 +88,55 @@ locals {
     trust_level = "trusted"
   TOML
 
-  # AWS MCP servers for Codex (native TOML [mcp_servers.*], appended to
-  # config.toml by the module). Codex 0.159.2 starts stdio MCP servers with
-  # only the explicit `env` map, so `env_vars` must forward the IRSA values
-  # required to obtain AWS credentials. These default values keep the region
-  # and pre-warmed uv cache consistent with the workspace image. KEEP VERSIONS
-  # IN SYNC with images/coder-workspace-base/Dockerfile.
+  # AWS MCP server for Codex (native TOML [mcp_servers.*], appended to
+  # config.toml by the module): the Agent Toolkit for AWS managed remote AWS MCP
+  # Server, reached over stdio via `uvx mcp-proxy-for-aws` (SigV4). One server
+  # replaces the former AWS Labs set (iac/pricing/serverless/cloudwatch) -- AWS
+  # positions the Agent Toolkit as their successor -- exposing AWS API access
+  # (call_aws), live docs/API-ref search, runtime skill discovery, and a
+  # sandboxed Python tool. Codex 0.159.2 starts stdio MCP servers with only the
+  # explicit `env` map, so `env_vars` forwards the IRSA values the proxy needs
+  # to sign SigV4 requests. KEEP THE PROXY VERSION IN SYNC with
+  # images/coder-workspace-base/Dockerfile and
+  # templates/awshp-k8s-with-{claude-code,kiro-cli}/main.tf.
+  # See https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/.
   #
-  # NOTE: the managed remote `aws-mcp` server (AWS's Agent Toolkit endpoint via
-  # mcp-proxy-for-aws, which provided call_aws for arbitrary AWS APIs plus general
-  # AWS documentation) was REMOVED across all templates: its remote endpoint
-  # intermittently failed the MCP handshake with "-32602 Invalid request
-  # parameters", disabling the server (Codex, an rmcp client, was hit hardest).
-  # General AWS API access is available via the AWS CLI (v2) and boto3, which the
-  # model drives directly from the shell.
+  # NOTE: SigV4 (local proxy) is used rather than OAuth because Codex runs
+  # headless (no browser for a per-user AWS Sign-in popup) and the pod carries
+  # IRSA credentials. (OAuth is used for the org-level Coder Agents server in
+  # ai-providers.) An earlier remote `aws-mcp` attempt was removed after
+  # `-32602` handshake failures (Codex, an rmcp client, was hit hardest); it is
+  # re-introduced here pinned to a known-good proxy version against the
+  # co-located regional endpoint.
   codex_mcp_toml = <<-TOML
-    [mcp_servers.awslabs-aws-iac-mcp-server]
+    [mcp_servers.aws-mcp]
     command = "uvx"
-    args = ["awslabs.aws-iac-mcp-server==1.0.25"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
-    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
-
-    [mcp_servers.awslabs-aws-pricing-mcp-server]
-    command = "uvx"
-    args = ["awslabs.aws-pricing-mcp-server==1.1.0"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
-    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
-
-    [mcp_servers.awslabs-aws-serverless-mcp-server]
-    command = "uvx"
-    args = ["awslabs.aws-serverless-mcp-server==0.2.0"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
-    env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
-
-    [mcp_servers.awslabs-cloudwatch-mcp-server]
-    command = "uvx"
-    args = ["awslabs.cloudwatch-mcp-server==0.2.0"]
+    args = ["mcp-proxy-for-aws==1.6.3", "https://aws-mcp.${local.aws_region}.api.aws/mcp", "--metadata", "AWS_REGION=${local.aws_region}"]
     env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
     env_vars = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"]
   TOML
+
+  # Recommended AWS agent rules, seeded to ~/.coder/AGENTS.md at startup so the
+  # Coder workspace agent shares them with every chat. Inlined because Coder
+  # uploads only this template directory. KEEP IN SYNC with
+  # agent-toolkit/aws-agent-rules.md.
+  aws_agent_rules = <<-RULES
+    # AWS agent rules (Agent Toolkit for AWS)
+
+    - Use the AWS MCP Server (aws-mcp) for AWS API calls and AWS documentation,
+      so actions are attributable (aws:ViaAWSMCPService / aws:CalledViaAWSMCP)
+      and audited in CloudTrail/CloudWatch.
+    - Discover an Agent Toolkit skill for the task before starting; skills are
+      discovered at runtime through the AWS MCP Server.
+    - Verify APIs and defaults against current docs via the MCP server instead
+      of relying on possibly-stale training data.
+    - Prefer infrastructure as code (CDK / CloudFormation) over imperative CLI
+      mutations for anything you intend to keep.
+    - Shared demo account: treat production-like resources as read-only unless
+      asked; propose destructive actions rather than executing them.
+    - Default Region ${local.aws_region}. Tag resources Project=partner-ai-dlc,
+      ManagedBy=agent; prefix demo resources with paidlc-.
+  RULES
 }
 
 # Minimum vCPUs needed 
@@ -262,6 +272,13 @@ switched by mistake, restart Codex (or the `codex` app) to return to the configu
 model.
 MD
     fi
+
+    # Seed the recommended AWS agent rules (Agent Toolkit best practices). The
+    # Coder workspace agent scans ~/.coder and shares it with every chat.
+    mkdir -p $HOME/.coder
+    cat > $HOME/.coder/AGENTS.md <<'RULES_EOF'
+${local.aws_agent_rules}
+RULES_EOF
     EOT
 
 }

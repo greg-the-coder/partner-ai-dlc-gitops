@@ -210,6 +210,16 @@ Resources:
               - sts:AssumeRole
               - sts:TagSession
       Path: "/"
+      # AWS MCP Server (Agent Toolkit for AWS) OAuth 2.1 access. Grants
+      # signin:AuthorizeOAuth2Access + signin:CreateOAuth2Token so the identity
+      # this role backs can complete AWS Sign-in OAuth for the AWS MCP Server --
+      # used by the org-level Coder Agents MCP server (per-user OAuth popup) and
+      # by the headless client-credentials / Kiro-CLI OAuth paths. The
+      # per-workspace SigV4 proxy does not require this (it uses the role's
+      # existing permissions), but it is attached here because workshop users
+      # assume this same role.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSMCPSignInOAuthAccessPolicy
       Policies:
         - PolicyName: WorkshopCoderPolicy
           PolicyDocument:

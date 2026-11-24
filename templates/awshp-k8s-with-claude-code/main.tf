@@ -55,21 +55,25 @@ locals {
   # non-ECR images (e.g. the codercom/enterprise-base default).
   aws_region = try(regex("\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com", var.workspace_image)[0], "us-east-1")
 
-  # MCP servers added to Claude Code at user scope, all over stdio via `uvx`
-  # (quiet logging). A citizen-builder toolkit of AWS Labs MCP servers spanning
-  # the AWS solution lifecycle: design & validate IaC (iac), estimate cost
-  # (pricing), then build & operate the account (serverless, cloudwatch). All
-  # calls use the workspace IAM role (`<cluster>-workshop-user`); AWS_REGION pins
-  # the deployment operation region (local.aws_region, derived from the ECR image
-  # URI). See https://github.com/awslabs/mcp.
+  # AWS MCP server added to Claude Code at user scope: the Agent Toolkit for AWS
+  # managed remote AWS MCP Server, reached over stdio via `uvx mcp-proxy-for-aws`
+  # (SigV4). One server replaces the former AWS Labs set
+  # (iac/pricing/serverless/cloudwatch) -- AWS positions the Agent Toolkit as
+  # their successor -- exposing AWS API access (call_aws), live docs/API-ref
+  # search, runtime skill discovery, and a sandboxed Python tool through a
+  # single authenticated endpoint. Calls use the workspace IAM role
+  # (`<cluster>-workshop-user`); the proxy signs with SigV4 from the pod's IRSA
+  # web-identity creds (injected by the reconcile script below). AWS_REGION pins
+  # the operation region (local.aws_region, from the ECR image URI) and selects
+  # the co-located regional endpoint. See
+  # https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/.
   #
-  # NOTE: the managed remote `aws-mcp` server (AWS's Agent Toolkit endpoint via
-  # mcp-proxy-for-aws, which provided call_aws for arbitrary AWS APIs plus general
-  # AWS documentation) was REMOVED: its remote endpoint intermittently failed the
-  # MCP handshake with "-32602 Invalid request parameters", disabling the server.
-  # General AWS API access is instead available through the AWS CLI (v2, installed
-  # in the image) and boto3, which the agent drives directly from the shell.
-  #
+  # NOTE: SigV4 (local proxy) is used here rather than OAuth because Claude Code
+  # runs headless in the workspace (no browser for a per-user AWS Sign-in popup)
+  # and the pod already carries IRSA credentials. (OAuth is used for the
+  # org-level Coder Agents server in ai-providers.) An earlier remote `aws-mcp`
+  # attempt was removed after `-32602` handshake failures; it is re-introduced
+  # here pinned to a known-good proxy version against the regional endpoint.
   # Common env applied to EVERY MCP server. Claude Code (a CLI) inherits the
   # login-shell environment, but we set these explicitly so the servers are
   # robust regardless of launcher (and to match the Kiro IDE, whose MCP client
@@ -83,34 +87,45 @@ locals {
     UV_CACHE_DIR               = "/opt/uv-cache"
   }
 
-  # Versions are PINNED (not @latest) so the on-image pre-warmed uv cache is
+  # Version is PINNED (not @latest) so the on-image pre-warmed uv cache is
   # always a hit; @latest drift caused cold re-downloads that timed out MCP
-  # startup probes. KEEP THESE VERSIONS IN SYNC with
+  # startup probes. KEEP THIS VERSION IN SYNC with
   # images/coder-workspace-base/Dockerfile and
-  # templates/awshp-k8s-with-kiro-cli/main.tf.
+  # templates/awshp-k8s-with-{kiro-cli,codex}/main.tf.
   mcp_servers = {
-    "awslabs-aws-iac-mcp-server" = {
+    "aws-mcp" = {
       command = "uvx"
-      args    = ["awslabs.aws-iac-mcp-server==1.0.25"]
-      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
-    }
-    "awslabs-aws-pricing-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.aws-pricing-mcp-server==1.1.0"]
-      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
-    }
-    "awslabs-aws-serverless-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.aws-serverless-mcp-server==0.2.0"]
-      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
-    }
-    "awslabs-cloudwatch-mcp-server" = {
-      command = "uvx"
-      args    = ["awslabs.cloudwatch-mcp-server==0.2.0"]
-      env     = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
+      args = [
+        "mcp-proxy-for-aws==1.6.3",
+        "https://aws-mcp.${local.aws_region}.api.aws/mcp",
+        "--metadata", "AWS_REGION=${local.aws_region}",
+      ]
+      env = merge(local.mcp_common_env, { FASTMCP_LOG_LEVEL = "ERROR" })
     }
   }
   mcp_json = jsonencode({ mcpServers = local.mcp_servers })
+
+  # Recommended AWS agent rules, seeded to ~/.coder/AGENTS.md at startup so the
+  # Coder workspace agent shares them with every chat (and Claude Code picks
+  # them up). Inlined because Coder uploads only this template directory. KEEP
+  # IN SYNC with agent-toolkit/aws-agent-rules.md.
+  aws_agent_rules = <<-RULES
+    # AWS agent rules (Agent Toolkit for AWS)
+
+    - Use the AWS MCP Server (aws-mcp) for AWS API calls and AWS documentation,
+      so actions are attributable (aws:ViaAWSMCPService / aws:CalledViaAWSMCP)
+      and audited in CloudTrail/CloudWatch.
+    - Discover an Agent Toolkit skill for the task before starting; skills are
+      discovered at runtime through the AWS MCP Server.
+    - Verify APIs and defaults against current docs via the MCP server instead
+      of relying on possibly-stale training data.
+    - Prefer infrastructure as code (CDK / CloudFormation) over imperative CLI
+      mutations for anything you intend to keep.
+    - Shared demo account: treat production-like resources as read-only unless
+      asked; propose destructive actions rather than executing them.
+    - Default Region ${local.aws_region}. Tag resources Project=partner-ai-dlc,
+      ManagedBy=agent; prefix demo resources with paidlc-.
+  RULES
 }
 
 # Minimum vCPUs needed 
@@ -558,18 +573,19 @@ resource "coder_script" "claude_config_reconcile" {
     sleep 5   # let install's final trust-dialog write land
     [ -f "$CFG" ] || echo '{}' > "$CFG"
 
-    # (1) Authoritative managed MCP set: drop existing awslabs-* entries (prunes
-    # removed/renamed servers and stale env such as an old AWS_REGION), then
-    # merge in this template's set. Non-managed (user-added) servers are kept.
-    # The pod's live IRSA role/token are injected into every managed server's
-    # env so the boto3-based awslabs servers can resolve credentials even if the
-    # launcher does not forward AWS_* (matches the Kiro IDE behaviour).
+    # (1) Authoritative managed MCP set: drop any previously-managed AWS entries
+    # (awslabs-* from the pre-Agent-Toolkit set, plus the renamed
+    # aws-api-mcp-server / aws-knowledge-mcp-server), then merge in this
+    # template's set (the single aws-mcp proxy). Non-managed (user-added)
+    # servers are kept. The pod's live IRSA role/token are injected into every
+    # managed server's env so mcp-proxy-for-aws can resolve SigV4 credentials
+    # even if the launcher does not forward AWS_* (matches the Kiro IDE).
     ROLE="$${AWS_ROLE_ARN:-}"
     TOKF="$${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
     tmp=$(mktemp)
     if jq --argjson desired "$DESIRED_MCP" --arg role "$ROLE" --arg tok "$TOKF" '
           ($desired | if ($role | length) > 0 then map_values(.env = ((.env // {}) + {AWS_ROLE_ARN: $role, AWS_WEB_IDENTITY_TOKEN_FILE: $tok})) else . end) as $d
-          | .mcpServers = ((.mcpServers // {}) | with_entries(select((.key | startswith("awslabs-")) or (.key == "aws-mcp") or (.key == "aws-api-mcp-server") | not))) + $d
+          | .mcpServers = ((.mcpServers // {}) | with_entries(select((.key | startswith("awslabs-")) or (.key == "aws-api-mcp-server") or (.key == "aws-knowledge-mcp-server") | not))) + $d
         ' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
       echo "Reconciled managed MCP servers in $CFG."
     else
@@ -609,6 +625,14 @@ resource "coder_script" "claude_config_reconcile" {
     done
     wait
     echo "Warmed uv cache for all uvx MCP servers."
+
+    # Seed the recommended AWS agent rules (Agent Toolkit best practices). The
+    # Coder workspace agent scans ~/.coder and shares it with every chat.
+    mkdir -p $HOME/.coder
+    cat > $HOME/.coder/AGENTS.md <<'RULES_EOF'
+${local.aws_agent_rules}
+RULES_EOF
+    echo "Seeded AWS agent rules to ~/.coder/AGENTS.md"
     exit 0
   EOT
 }

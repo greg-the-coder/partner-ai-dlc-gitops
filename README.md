@@ -173,15 +173,23 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 All templates support both compute lanes (Fargate default, EC2 Spot optional) via the
 **Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
 
-The **Claude Code**, **Codex**, and **Kiro CLI** templates ship a citizen-builder set of
-[AWS Labs MCP servers](https://github.com/awslabs/mcp) preconfigured for their assistants
-— IaC (CloudFormation + CDK), pricing, Serverless, and CloudWatch — running on demand via
-`uvx`. General AWS API access is provided by the AWS CLI (v2) and boto3, which the agents
-drive directly from the shell.
+The **Claude Code**, **Codex**, and **Kiro CLI** templates connect to the
+[Agent Toolkit for AWS](https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/)
+**AWS MCP Server** — one managed, remote endpoint giving each assistant AWS API
+access (`call_aws`), live AWS documentation/API-reference search,
+runtime-discoverable skills, and a sandboxed Python tool. In the workspaces the
+server is reached over stdio via `uvx mcp-proxy-for-aws` (SigV4), signed with
+the pod's IRSA credentials. This replaces the former per-assistant set of
+[AWS Labs MCP servers](https://github.com/awslabs/mcp) (IaC, pricing,
+Serverless, CloudWatch), which AWS now supersedes with the Agent Toolkit.
 
-> The managed remote `aws-mcp` server (AWS Agent Toolkit; arbitrary-API `call_aws` +
-> general AWS docs) was removed from all templates: its remote endpoint intermittently
-> failed the MCP handshake with `-32602 Invalid request parameters`, disabling the server.
+> The org-level **Coder Agents** assistant uses the same AWS MCP Server via the
+> Coder AI Governance MCP registration (`ai-providers/ai_providers.tf`), with
+> per-user **OAuth 2.1 (AWS Sign-in)** authentication (auto-discovery). An
+> earlier remote `aws-mcp` attempt was removed after `-32602` handshake
+> failures; it is re-introduced here pinned to a known-good proxy version
+> against the co-located regional endpoint, and validated per client before
+> rollout. See `agent-toolkit/README.md`.
 
 ## Prerequisites
 

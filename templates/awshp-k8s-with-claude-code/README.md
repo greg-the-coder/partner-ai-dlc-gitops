@@ -1,6 +1,6 @@
 ---
 display_name: AWS Workshop - Kubernetes with Claude Code
-description: Fargate Claude Code workspace routed through the Coder AI Gateway, with AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
+description: Fargate Claude Code workspace routed through the Coder AI Gateway, with the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
@@ -29,15 +29,19 @@ persisted on **Amazon EFS** so work survives workspace restarts.
   the workspace — so all usage is governed and observable by the **Coder AI Governance
   Add-On** (prompts, spend, and tool calls appear in Coder AI Session logs).
   > Requires Coder v2.32+ with the Coder AI Governance Add-On enabled on the deployment.
-- **MCP** (Model Context Protocol) — a citizen-builder set of
-  [AWS Labs MCP servers](https://github.com/awslabs/mcp) is added to Claude Code at user
-  scope and run on demand via `uvx`: **IaC** (CloudFormation + CDK), **pricing**,
-  **Serverless**, and **CloudWatch** — covering the design → cost → build/deploy → operate
-  lifecycle. Calls use the workspace IAM role.
-  > The managed remote `aws-mcp` server (arbitrary-API `call_aws` + general AWS docs) was
-  > removed from all templates because its remote endpoint intermittently failed the MCP
-  > handshake (`-32602`). General AWS API access is available via the **AWS CLI** (v2) and
-  > **boto3**, which the assistant drives directly from the shell.
+- **MCP** (Model Context Protocol) — the
+  [Agent Toolkit for AWS](https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/)
+  **AWS MCP Server** is added to Claude Code at user
+  scope, reached over stdio via `uvx mcp-proxy-for-aws` (SigV4). One managed,
+  remote endpoint provides AWS API access (`call_aws`), live AWS
+  documentation/API-reference search, runtime-discoverable skills, and a
+  sandboxed Python tool — superseding the former AWS Labs servers (IaC,
+  pricing, Serverless, CloudWatch). Calls use the workspace IAM role (IRSA).
+  > SigV4 (local proxy) is used in the workspace because it is headless and
+  > already carries IRSA credentials; the org-level Coder Agents chat uses the
+  > same AWS MCP Server with per-user OAuth. An earlier remote `aws-mcp`
+  > attempt was removed after `-32602` handshake failures and is re-introduced
+  > here pinned to a known-good proxy version against the regional endpoint.
 
 ### Notebooks & agent SDKs (Coder AI Gateway)
 The template points the Python agent SDKs at the **Coder AI Gateway** (via agent-wide

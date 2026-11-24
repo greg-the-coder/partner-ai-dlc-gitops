@@ -1,6 +1,6 @@
 ---
 display_name: AWS Workshop - Kubernetes with OpenAI Codex
-description: Fargate OpenAI Codex CLI workspace routed through the Coder AI Gateway (GPT-5.6 Sol on Amazon Bedrock), with AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
+description: Fargate OpenAI Codex CLI workspace routed through the Coder AI Gateway (GPT-5.6 Sol on Amazon Bedrock), with the Agent Toolkit for AWS MCP Server, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
@@ -29,18 +29,22 @@ Gateway.
   keys in the workspace — so all usage is governed and observable by the **Coder AI
   Governance Add-On** (prompts, spend, and tool calls appear in Coder AI Session logs).
   > Requires Coder v2.32+ with the Coder AI Governance Add-On enabled on the deployment.
-- **MCP** (Model Context Protocol) — the same citizen-builder set of
-  [AWS Labs MCP servers](https://github.com/awslabs/mcp) as the Claude Code template is
-  configured for Codex (native `[mcp_servers.*]` TOML) and run on demand via `uvx`:
-  **IaC** (CloudFormation + CDK), **pricing**, **Serverless**, and **CloudWatch** —
-  covering the design → cost → build/deploy → operate lifecycle. The configuration
+- **MCP** (Model Context Protocol) — the same
+  [Agent Toolkit for AWS](https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/)
+  **AWS MCP Server** as the Claude Code template is
+  configured for Codex (native `[mcp_servers.*]` TOML), reached over stdio via
+  `uvx mcp-proxy-for-aws` (SigV4). One managed, remote endpoint provides AWS API
+  access (`call_aws`), live docs/API-reference search, runtime-discoverable
+  skills, and a sandboxed Python tool — superseding the former AWS Labs servers
+  (IaC, pricing, Serverless, CloudWatch). The configuration
   explicitly forwards the workspace IAM role (IRSA) variables to each MCP process;
   Codex 0.159.2 starts stdio MCP servers with only their configured environment, so
-  forwarding is required for the servers to obtain AWS credentials.
-  > The managed remote `aws-mcp` server (arbitrary-API `call_aws` + general AWS docs) was
-  > removed from all templates because its remote endpoint intermittently failed the MCP
-  > handshake (`-32602`). General AWS API access is available via the **AWS CLI** (v2) and
-  > **boto3**, which the model drives directly from the shell.
+  forwarding is required for the proxy to obtain AWS credentials.
+  > SigV4 (local proxy) is used in the workspace because it is headless; the
+  > org-level Coder Agents chat uses the same AWS MCP Server with per-user
+  > OAuth. An earlier remote `aws-mcp` attempt was removed after `-32602`
+  > handshake failures (Codex, an rmcp client, was hit hardest) and is
+  > re-introduced here pinned to a known-good proxy version.
 
 ### Codex configuration notes
 The template bakes a `config.toml` (via the module's `base_config_toml`) tuned for the
