@@ -16,7 +16,7 @@
 #   MCP_AWS_SLUG              - AWS MCP server slug               (default aws-mcp)
 #   MCP_AWS_URL               - AWS MCP Server endpoint           (default https://aws-mcp.us-west-2.api.aws/mcp)
 #   MCP_AWS_AVAIL             - availability policy               (default default_on)
-#   MCP_AWS_AUTH_TYPE         - auth mode: oauth2 | none          (default oauth2)
+#   MCP_AWS_AUTH_TYPE         - auth mode: none | oauth2           (default none)
 #
 set -euo pipefail
 
@@ -60,7 +60,7 @@ export TF_VAR_bedrock_openai_api_key="${BEDROCK_OPENAI_KEY:-}"
 export TF_VAR_mcp_aws_slug="${MCP_AWS_SLUG:-${MCP_KNOWLEDGE_SLUG:-aws-mcp}}"
 export TF_VAR_mcp_aws_url="${MCP_AWS_URL:-https://aws-mcp.us-west-2.api.aws/mcp}"
 export TF_VAR_mcp_aws_availability="${MCP_AWS_AVAIL:-${MCP_KNOWLEDGE_AVAIL:-default_on}}"
-export TF_VAR_mcp_aws_auth_type="${MCP_AWS_AUTH_TYPE:-oauth2}"
+export TF_VAR_mcp_aws_auth_type="${MCP_AWS_AUTH_TYPE:-none}"
 
 terraform init -input=false
 

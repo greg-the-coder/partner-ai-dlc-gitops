@@ -242,13 +242,15 @@ the pod's IRSA credentials. This replaces the former per-assistant set of
 [AWS Labs MCP servers](https://github.com/awslabs/mcp) (IaC, pricing,
 Serverless, CloudWatch), which AWS now supersedes with the Agent Toolkit.
 
-> The org-level **Coder Agents** assistant uses the same AWS MCP Server via the
-> Coder AI Governance MCP registration (`ai-providers/ai_providers.tf`), with
-> per-user **OAuth 2.1 (AWS Sign-in)** authentication (auto-discovery). An
-> earlier remote `aws-mcp` attempt was removed after `-32602` handshake
-> failures; it is re-introduced here pinned to a known-good proxy version
-> against the co-located regional endpoint, and validated per client before
-> rollout. See `agent-toolkit/README.md`.
+> The org-level **Coder Agents** assistant connects to the AWS MCP Server via the
+> Coder AI Governance MCP registration (`ai-providers/ai_providers.tf`) using
+> **anonymous** auth (`auth_type = none`) — AWS documentation search and agent
+> skills. Per-user OAuth 2.1 (AWS Sign-in) is **not** usable for a server-side
+> Coder MCP server: AWS Sign-in's Dynamic Client Registration only accepts
+> allow-listed redirect URIs (localhost + specific SaaS vendors), so Coder's
+> callback is rejected. Full AWS **API** access lives in the workspace lanes,
+> where `mcp-proxy-for-aws` signs requests with the pod's IRSA identity (SigV4).
+> See `agent-toolkit/README.md`.
 
 ## Prerequisites
 

@@ -9,21 +9,25 @@ the AWS Labs MCP servers and the AWS Knowledge MCP server.
 
 | Surface | Before | After |
 |---|---|---|
-| **Org-level Coder Agents** (`ai-providers/ai_providers.tf`) | AWS Knowledge MCP (`knowledge-mcp.global.api.aws`, anonymous) | **AWS MCP Server** (`aws-mcp.us-west-2.api.aws/mcp`), `auth_type = oauth2` (per-user AWS Sign-in, auto-discovery) |
+| **Org-level Coder Agents** (`ai-providers/ai_providers.tf`) | AWS Knowledge MCP (`knowledge-mcp.global.api.aws`, anonymous) | **AWS MCP Server** (`aws-mcp.us-west-2.api.aws/mcp`), `auth_type = none` (anonymous: docs search + skills) |
 | **Workspace IDE/CLI** (Kiro, Claude Code, Codex templates) | 4 AWS Labs stdio servers (`awslabs.*`) | single **`aws-mcp`** via `uvx mcp-proxy-for-aws==1.6.3` (SigV4, IRSA creds) |
 | **Base image** (`images/coder-workspace-base/Dockerfile`) | pre-warm 4 `awslabs.*` packages | pre-warm `mcp-proxy-for-aws==1.6.3` |
-| **IAM** (`infrastructure/coder_deployment.yaml`) | — | `AWSMCPSignInOAuthAccessPolicy` on `WorkshopCoderRole` |
+| **IAM** (`infrastructure/coder_deployment.yaml`) | — | `AWSMCPSignInOAuthAccessPolicy` on `WorkshopCoderRole` (optional; for in-workspace AWS Sign-in OAuth paths such as Kiro CLI — not used by the org-level server or the SigV4 proxy) |
 | **Rules** | — | `aws-agent-rules.md` seeded to `~/.coder/AGENTS.md` per workspace |
 
 ## Why two auth models
 
-- **Org-level chat (OAuth 2.1):** runs in the Coder control plane and is
-  per-user, so each developer authorizes interactively with their own AWS
-  identity via the connect popup. Coder discovers AWS Sign-in's OAuth endpoints
-  (RFC 9728 → 8414 → 7591) and stores/refreshes the token per user.
+- **Org-level chat (anonymous):** runs in the Coder control plane as a shared,
+  server-side MCP registration, so it connects with **no credentials**
+  (`auth_type = none`) and uses the AWS MCP Server's unauthenticated subset
+  (documentation search + skills). Per-user OAuth 2.1 is **not** usable here:
+  AWS Sign-in's Dynamic Client Registration only accepts an allow-listed set of
+  redirect URIs (localhost + specific SaaS vendors), and Coder's server-side
+  CloudFront callback is rejected with `invalid_redirect_uri`.
 - **Workspace IDE/CLI (SigV4):** headless pods with no browser, but they already
   carry IRSA (`AWS_ROLE_ARN` / `AWS_WEB_IDENTITY_TOKEN_FILE`) credentials, which
-  `mcp-proxy-for-aws` signs with directly.
+  `mcp-proxy-for-aws` signs with directly — this is where full AWS API access
+  lives.
 
 ## Skills
 
