@@ -1,0 +1,73 @@
+# EKS Auto Mode custom NodePool for Coder workspaces on AWS Nitro Sandboxes.
+#
+# This adds a *third* workspace compute lane alongside AWS Fargate and EC2 Spot.
+# Workspace Pods that select this lane set runtimeClassName: isolated-sandbox, so
+# each Pod runs in its own hardware-isolated Nitro Sandbox (a Firecracker microVM
+# with its own kernel). EKS Auto Mode provisions Nitro-Enclaves-capable nodes on
+# demand for those Pods and scales them to zero when idle.
+#
+# Scheduling contract (see the workspace templates):
+#   * Nodes are labelled  coder.workspace/lane=nitro
+#   * Nodes are tainted    coder.workspace/lane=nitro:NoSchedule
+# Only workspace Pods that opt in (nodeSelector + matching toleration, set when
+# the template's "Compute Lane" parameter = nitro) land here. The isolated-sandbox
+# RuntimeClass additionally carries a per-Pod resource overhead that Auto Mode
+# uses to size and select an Enclaves-enabled instance type.
+#
+# On-demand (not Spot): a hardware-isolated workspace should not be interrupted by
+# a Spot reclaim. Requires Kubernetes 1.36+ on EKS Auto Mode (Nitro Sandboxes),
+# amd64 nodes, and the aws-efs-csi-driver add-on >= 3.5.0 for the EFS home.
+#
+# The NodePool references the Auto Mode built-in "default" NodeClass, so the node
+# IAM role, subnets, and security groups are inherited from Auto Mode.
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: coder-ws-nitro
+  labels:
+    app.kubernetes.io/part-of: coder
+spec:
+  template:
+    metadata:
+      labels:
+        coder.workspace/lane: nitro
+    spec:
+      # Inherit Auto Mode's managed NodeClass (role / subnets / security groups).
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      # Keep everything else off these nodes unless it explicitly tolerates the taint.
+      taints:
+        - key: coder.workspace/lane
+          value: nitro
+          effect: NoSchedule
+      requirements:
+        # On-demand only: do not interrupt a hardware-isolated workspace.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        # General-purpose families; Auto Mode further restricts to instance types
+        # that support Nitro Enclaves when an isolated-sandbox Pod is pending.
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-cpu
+          operator: In
+          values: ["4", "8", "16"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["5"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      expireAfter: 336h
+      terminationGracePeriod: 24h
+  # Safety ceiling for the whole Nitro lane.
+  limits:
+    cpu: "500"
+    memory: 500Gi
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m

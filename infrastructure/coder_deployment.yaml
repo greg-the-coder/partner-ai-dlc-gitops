@@ -2,9 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Cloudformation template for Coder and AWS Modernization Workshop
 Parameters:
   KubernetesVersion:
-    Description: Kubernetes version
+    Description: Kubernetes version. 1.36+ is required for AWS Nitro Sandboxes (the nitro compute lane) on EKS Auto Mode.
     Type: String
-    Default: "1.35"
+    Default: "1.37"
 
   CoderVersion:
     Description: Coder version
@@ -1005,6 +1005,11 @@ Resources:
 
                       # EC2 Spot workspace lane, auto-scaled by EKS Auto Mode.
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/spot-nodepool.yaml"
+
+                      # AWS Nitro Sandbox workspace lane: dedicated on-demand
+                      # NodePool; Auto Mode provisions Nitro-Enclaves-capable
+                      # nodes for isolated-sandbox pods scheduled here.
+                      kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/nitro-nodepool.yaml"
 
                       # Fargate lane: only workspace pods labelled compute=fargate are
                       # placed on Fargate; spot-lane pods (compute=spot) are excluded and

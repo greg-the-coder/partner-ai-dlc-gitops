@@ -170,8 +170,19 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 | `awshp-k8s-base-codex` | AWS Workshop — Kubernetes with OpenAI Codex | OpenAI Codex CLI (GPT-5.6 Sol via the Coder AI Gateway) for interactive development. |
 | `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
 
-All templates support both compute lanes (Fargate default, EC2 Spot optional) via the
-**Compute Lane** parameter, with EFS-backed persistent home directories in either lane.
+All templates support three compute lanes via the **Compute Lane** parameter,
+with EFS-backed persistent home directories in every lane:
+
+- **Fargate** (default) — serverless, Firecracker microVM isolation.
+- **EC2 Spot** — auto-scaled by EKS Auto Mode; lower cost; allows larger workloads.
+- **AWS Nitro Sandbox** — each workspace Pod runs in its own hardware-isolated
+  Nitro Sandbox (a microVM with its own kernel) via the `isolated-sandbox`
+  RuntimeClass on a dedicated on-demand NodePool (`coder-ws-nitro`). This lane
+  provides the strongest workload isolation and requires EKS **Auto Mode on
+  Kubernetes 1.36+** (the cluster defaults to 1.37) and the `aws-efs-csi-driver`
+  add-on **≥ 3.5.0** for the EFS home. Network egress uses the deployment's
+  existing controls — this lane adds kernel isolation only, not a network
+  boundary.
 
 The **Claude Code**, **Codex**, and **Kiro CLI** templates connect to the
 [Agent Toolkit for AWS](https://aws.amazon.com/products/developer-tools/agent-toolkit-for-aws/)
