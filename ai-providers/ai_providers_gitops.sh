@@ -42,7 +42,11 @@ if need_tf; then
   mkdir -p /tmp/tfbin && unzip -q -o /tmp/tf.zip -d /tmp/tfbin
   export PATH="/tmp/tfbin:$PATH"
 fi
-terraform version | head -1
+# Print the Terraform version. Use awk (not `head -1`): awk reads all of stdin,
+# so `terraform` never gets SIGPIPE from an early-closing reader -- `head -1`
+# closes the pipe after one line and, under `set -o pipefail`, the SIGPIPE
+# (exit 141) from terraform aborts the whole script.
+terraform version | awk 'NR==1'
 
 # --- Map environment -> TF_VAR_* ---------------------------------------------
 export TF_VAR_coder_url="${CODER_AGENT_URL}"
