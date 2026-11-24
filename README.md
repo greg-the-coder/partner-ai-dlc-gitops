@@ -48,7 +48,14 @@ safely. That is what this repository provides:
   install dependencies, and execute generated code. Doing that on
   [Firecracker microVM](https://firecracker-microvm.github.io/)-isolated
   [Fargate workspaces](#fargate-workspaces) confines each agent run to a disposable,
-  single-tenant VM — the blast radius of an autonomous action is one sandbox.
+  single-tenant VM — the blast radius of an autonomous action is one sandbox. For the
+  highest-risk, untrusted, or fully-autonomous runs, the
+  [**AWS Nitro Sandbox** lane](#workspace-compute-lanes-fargate-ec2-spot-aws-nitro-sandbox)
+  tightens that boundary further: each Pod runs on the **AWS Nitro System** with a
+  hardware-enforced trust boundary, per-Pod policy enforcement from inside the guest, and an
+  optional confidential mode (encrypted memory + cryptographic attestation) — isolation that
+  holds even against a compromised node or cluster administrator, which Fargate's managed
+  data plane does not offer.
 - **Enterprise guardrails by construction.** Workspaces inherit scoped IAM roles, run inside
   your VPC, use models served through Amazon Bedrock, and are provisioned from version-
   controlled, reviewable templates. Access, networking, models, and tooling are all things
@@ -62,8 +69,12 @@ safely. That is what this repository provides:
 For **highly regulated industries** (financial services, healthcare, public sector), the
 primary barrier to agentic AI is not capability but **control, isolation, and
 auditability**. Running AI-DLC on this platform addresses those directly: VM-level isolation
-per workspace (Firecracker), no shared kernels, data and inference kept within AWS accounts
-and Regions you control, IAM/VPC boundaries around every agent, and human approval gates
+per workspace (Firecracker on Fargate) with no shared kernels — and, for workloads that
+demand the strongest boundary, an optional **AWS Nitro Sandbox** lane that adds a
+hardware-enforced trust boundary, per-Pod policy enforcement, and a confidential mode
+(encrypted memory + attestation) that protects the workload even from node and cluster
+administrators. Data and inference stay within AWS accounts
+and Regions you control, IAM/VPC boundaries wrap every agent, and human approval gates are
 built into the methodology. AWS's own [Responsible AI
 Policy](https://aws.amazon.com/ai/responsible-ai/policy/) — review agent output and costs —
 maps cleanly onto AI-DLC's human-in-the-loop phase gates.
@@ -122,6 +133,31 @@ suggest — inside guardrails the enterprise controls.
 
 Workspace templates create an EFS access point + PV/PVC per workspace and mount it at
 `/home/coder`. Tools installed outside the home directory live in the container image.
+
+### Stronger still: the AWS Nitro Sandbox lane
+
+Fargate's Firecracker isolation is single-tenant and per-Pod, and it is the right default for
+most human and agent workspaces. When you need a **hardware-enforced** guarantee — for
+untrusted or fully-autonomous agent runs, or in highly regulated environments — select the
+**`nitro`** [compute lane](#workspace-compute-lanes-fargate-ec2-spot-aws-nitro-sandbox). It
+runs the workspace Pod in its own **AWS Nitro Sandbox** and adds, *beyond* what Fargate
+provides:
+
+- **A hardware trust boundary on the AWS Nitro System** — the Nitro hypervisor enforces CPU
+  and memory isolation between Pods, with a Nitro Secure Module and cryptographic
+  **attestation** of the running image and policy.
+- **Per-Pod policy enforcement** — a Cedar policy, enforced from inside the guest, governs
+  container admission, `exec`, logs, and mounts even if the node is untrusted.
+- **An optional confidential mode** — encrypted memory that protects workload data from node
+  operators and cluster administrators, a threat model Fargate's managed data plane does not
+  cover.
+- **Runs on nodes in your own cluster** — so you can place agent nodes behind your own
+  network controls (e.g. AWS Network Firewall) and node-level policy.
+
+Same images, same EFS `/home/coder`, and the same AWS identity keep working — the stronger
+isolation is a one-line RuntimeClass opt-in per workspace. See
+[Workspace compute lanes](#workspace-compute-lanes-fargate-ec2-spot-aws-nitro-sandbox) for
+how to select it.
 
 ## Workspace compute lanes (Fargate, EC2 Spot, AWS Nitro Sandbox)
 
@@ -391,6 +427,7 @@ terraform apply -auto-approve
 
 - [AWS AI-DLC (AI-Driven Development Life Cycle)](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows)
 - [Firecracker microVM](https://firecracker-microvm.github.io/) (powers AWS Fargate isolation)
+- [AWS Nitro Sandboxes on Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/sandboxing.html) (hardware-isolated / confidential pods — the `nitro` lane)
 - [Coder Documentation](https://coder.com/docs)
 - [Amazon EKS Fargate](https://docs.aws.amazon.com/eks/latest/userguide/fargate.html)
 - [Amazon EFS CSI Driver](https://docs.aws.amazon.com/eks/latest/userguide/efs-csi.html)
