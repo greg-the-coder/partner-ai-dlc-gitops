@@ -12,7 +12,7 @@ the AWS Labs MCP servers and the AWS Knowledge MCP server.
 | **Org-level Coder Agents** (`ai-providers/ai_providers.tf`) | AWS Knowledge MCP (`knowledge-mcp.global.api.aws`, anonymous) | **AWS MCP Server** (`aws-mcp.us-west-2.api.aws/mcp`), `auth_type = none` (anonymous: docs search + skills) |
 | **Workspace IDE/CLI** (Kiro, Claude Code, Codex templates) | 4 AWS Labs stdio servers (`awslabs.*`) | single **`aws-mcp`** via `uvx mcp-proxy-for-aws==1.6.3` (SigV4, IRSA creds) |
 | **Base image** (`images/coder-workspace-base/Dockerfile`) | pre-warm 4 `awslabs.*` packages | pre-warm `mcp-proxy-for-aws==1.6.3` |
-| **IAM** (`infrastructure/coder_deployment.yaml`) | — | `AWSMCPSignInOAuthAccessPolicy` on `WorkshopCoderRole` (optional; for in-workspace AWS Sign-in OAuth paths such as Kiro CLI — not used by the org-level server or the SigV4 proxy) |
+| **IAM** (`infrastructure/coder_deployment.yaml`) | — | No change — the workspace SigV4 proxy uses the existing `WorkshopCoderRole` permissions, and the org-level server is anonymous, so no AWS Sign-in OAuth policy is attached |
 | **Rules** | — | `aws-agent-rules.md` seeded to `~/.coder/AGENTS.md` per workspace |
 
 ## Why two auth models
